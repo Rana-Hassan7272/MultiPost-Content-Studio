@@ -2,18 +2,43 @@ name: Process Scheduled Posts
 
 on:
   schedule:
-    - cron: '*/50 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
   process-posts:
     runs-on: ubuntu-latest
     steps:
+      - name: Check Secrets
+        run: |
+          if [ -z "${{ secrets.SUPABASE_URL }}" ]; then
+            echo "Error: SUPABASE_URL secret is not set"
+            exit 1
+          fi
+          if [ -z "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" ]; then
+            echo "Error: SUPABASE_SERVICE_ROLE_KEY secret is not set"
+            exit 1
+          fi
+          echo "Secrets configured successfully"
+
       - name: Call Post Queue Processor
         run: |
-          curl -X POST \
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             "${{ secrets.SUPABASE_URL }}/functions/v1/post-queue-processor" \
             -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
             -H "apikey: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-            -H "Content-Type: application/json"
+            -H "Content-Type: application/json")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo "Response Code: $HTTP_CODE"
+          echo "Response Body: $BODY"
+          
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "✅ Post queue processed successfully"
+          else
+            echo "❌ Error processing post queue"
+            exit 1
+          fi
 
