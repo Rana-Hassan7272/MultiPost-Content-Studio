@@ -16,12 +16,13 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const authHeader = req.headers.get("Authorization");
-    const apikeyHeader = req.headers.get("apikey");
+    const authHeader = req.headers.get("Authorization") || req.headers.get("authorization");
+    const apikeyHeader = req.headers.get("apikey") || req.headers.get("Apikey");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     
     if (!supabaseServiceKey) {
+      console.error("SUPABASE_SERVICE_ROLE_KEY not configured");
       return new Response(
         JSON.stringify({ error: "Service role key not configured" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -32,13 +33,22 @@ Deno.serve(async (req: Request) => {
     
     if (authHeader) {
       providedKey = authHeader.replace(/^Bearer\s+/i, "").trim();
-    } else if (apikeyHeader) {
-      providedKey = apikeyHeader.trim();
     }
     
-    if (!providedKey || providedKey !== supabaseServiceKey.trim()) {
+    const expectedKey = supabaseServiceKey.trim();
+    
+    if (!providedKey) {
+      console.error("No Authorization header provided");
       return new Response(
-        JSON.stringify({ error: "Unauthorized - Service role key required" }),
+        JSON.stringify({ error: "Unauthorized - Service role key required in Authorization header" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
+    if (providedKey !== expectedKey) {
+      console.error("Service role key mismatch");
+      return new Response(
+        JSON.stringify({ error: "Unauthorized - Invalid service role key" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
