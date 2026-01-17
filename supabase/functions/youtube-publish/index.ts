@@ -13,7 +13,8 @@ interface PublishRequest {
   title: string;
   description: string;
   tags?: string[];
-  videoUrl: string;
+  videoUrl?: string;
+  filePath?: string;
   scheduledFor?: string;
 }
 
@@ -23,37 +24,24 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const authHeader = req.headers.get("Authorization")!;
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
-    const isServiceRole = authHeader?.includes(supabaseServiceKey);
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    let userId: string;
+    const body: PublishRequest = await req.json();
+    const { postId, accountId, title, description, tags = [], videoUrl, filePath, scheduledFor } = body;
 
-    if (isServiceRole) {
-      const body: PublishRequest = await req.json();
-      const { data: post } = await supabase
-        .from("posts")
-        .select("user_id")
-        .eq("id", body.postId)
-        .single();
-      if (!post) throw new Error("Post not found");
-      userId = post.user_id;
-    } else {
-      const authClient = createClient(supabaseUrl, supabaseServiceKey, {
-        global: { headers: { Authorization: authHeader! } },
-      });
-      const { data: { user }, error: userError } = await authClient.auth.getUser();
-      if (userError || !user) {
-        throw new Error("Unauthorized");
-      }
-      userId = user.id;
+    const { data: post, error: postError } = await supabase
+      .from("posts")
+      .select("user_id")
+      .eq("id", postId)
+      .single();
+
+    if (postError || !post) {
+      throw new Error("Post not found");
     }
 
-    const body: PublishRequest = await req.json();
-    const { postId, accountId, title, description, tags = [], videoUrl, scheduledFor } = body;
+    const userId = post.user_id;
 
     const { data: account, error: accountError } = await supabase
       .from("connected_accounts")
@@ -68,6 +56,23 @@ Deno.serve(async (req: Request) => {
     }
 
     let accessToken = account.access_token;
+
+    const channelCheck = await fetch(
+      `https://www.googleapis.com/youtube/v3/channels?part=id&mine=true&access_token=${accessToken}`
+    );
+
+    if (!channelCheck.ok) {
+      const channelError = await channelCheck.json();
+      if (channelError.error?.errors?.[0]?.reason === 'youtubeSignupRequired') {
+        throw new Error("YouTube channel not found. Please create a YouTube channel for this Google account first. Go to youtube.com and create a channel.");
+      }
+      throw new Error(`YouTube API error: ${JSON.stringify(channelError)}`);
+    }
+
+    const channelData = await channelCheck.json();
+    if (!channelData.items || channelData.items.length === 0) {
+      throw new Error("No YouTube channel found. Please create a YouTube channel for this Google account first.");
+    }
 
     if (account.expires_at && new Date(account.expires_at) <= new Date()) {
       if (!account.refresh_token) {
@@ -142,39 +147,57 @@ Deno.serve(async (req: Request) => {
       throw new Error("No upload URL received");
     }
 
-    const videoResponse = await fetch(videoUrl);
-    if (!videoResponse.ok) {
-      throw new Error("Failed to fetch video from storage");
-    }
+    let videoData: Uint8Array;
 
-    const videoStream = videoResponse.body;
-    if (!videoStream) {
-      throw new Error("No video stream available");
-    }
+    if (filePath) {
+      const { data: fileData, error: downloadError } = await supabase.storage
+        .from('media')
+        .download(filePath);
 
-    const reader = videoStream.getReader();
-    const chunks: Uint8Array[] = [];
+      if (downloadError || !fileData) {
+        throw new Error(`Failed to download video from storage: ${downloadError?.message || 'Unknown error'}`);
+      }
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-    }
+      const arrayBuffer = await fileData.arrayBuffer();
+      videoData = new Uint8Array(arrayBuffer);
+    } else if (videoUrl) {
+      const videoResponse = await fetch(videoUrl);
+      if (!videoResponse.ok) {
+        const errorText = await videoResponse.text();
+        throw new Error(`Failed to fetch video from URL: ${videoResponse.status} ${videoResponse.statusText} - ${errorText}`);
+      }
 
-    const videoBuffer = new Uint8Array(chunks.reduce((acc, chunk) => acc + chunk.length, 0));
-    let offset = 0;
-    for (const chunk of chunks) {
-      videoBuffer.set(chunk, offset);
-      offset += chunk.length;
+      const videoStream = videoResponse.body;
+      if (!videoStream) {
+        throw new Error("No video stream available");
+      }
+
+      const reader = videoStream.getReader();
+      const chunks: Uint8Array[] = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+
+      videoData = new Uint8Array(chunks.reduce((acc, chunk) => acc + chunk.length, 0));
+      let offset = 0;
+      for (const chunk of chunks) {
+        videoData.set(chunk, offset);
+        offset += chunk.length;
+      }
+    } else {
+      throw new Error("No video file path or URL provided");
     }
 
     const uploadResponse = await fetch(uploadUrl, {
       method: "PUT",
       headers: {
         "Content-Type": "video/*",
-        "Content-Length": videoBuffer.length.toString(),
+        "Content-Length": videoData.length.toString(),
       },
-      body: videoBuffer,
+      body: videoData,
     });
 
     if (!uploadResponse.ok) {

@@ -40,20 +40,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
+        options: {
+          data: {
+            full_name: fullName || null,
+          },
+        },
       });
 
-      if (error) throw error;
+      if (error) {
+        if (error.message.includes('rate limit') || error.status === 429) {
+          throw new Error('Too many requests. Please wait a moment and try again.');
+        }
+        if (error.message.includes('already registered')) {
+          throw new Error('This email is already registered. Please sign in instead.');
+        }
+        throw error;
+      }
 
-      if (data.user) {
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .insert({
-            id: data.user.id,
-            email: data.user.email!,
-            full_name: fullName || null,
-          });
+      if (!data.user) {
+        throw new Error('Failed to create account. Please try again.');
+      }
 
-        if (profileError) throw profileError;
+      if (!data.session) {
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        
+        if (signInError) {
+          if (signInError.message.includes('Email not confirmed')) {
+            throw new Error('Please disable email confirmation in Supabase settings (Authentication → Settings → Enable email confirmations: OFF)');
+          }
+          throw new Error('Account created. Please sign in manually.');
+        }
       }
 
       return { error: null };
@@ -64,12 +83,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = async (email: string, password: string) => {
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
-      if (error) throw error;
+      if (error) {
+        if (error.message.includes('Invalid login credentials')) {
+          throw new Error('Invalid email or password. Please check your credentials.');
+        }
+        if (error.message.includes('Email not confirmed')) {
+          throw new Error('Please confirm your email address before signing in. Check your inbox.');
+        }
+        if (error.status === 429) {
+          throw new Error('Too many login attempts. Please wait a moment and try again.');
+        }
+        throw error;
+      }
+
       return { error: null };
     } catch (error) {
       return { error: error as Error };

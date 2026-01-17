@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import {
   LayoutDashboard,
@@ -26,6 +26,15 @@ export function Dashboard() {
   const { signOut, user } = useAuth();
   const [currentView, setCurrentView] = useState<View>('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const view = urlParams.get('view') as View;
+    if (view && ['overview', 'calendar', 'media', 'compose', 'accounts', 'analytics'].includes(view)) {
+      setCurrentView(view);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
 
   const navigation = [
     { id: 'overview', name: 'Tableau de bord', icon: LayoutDashboard },

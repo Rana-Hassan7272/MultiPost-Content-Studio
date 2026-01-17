@@ -125,16 +125,37 @@ export function PostComposer() {
           if (account) {
             const { data: media } = await supabase
               .from('media_library')
-              .select('file_url')
+              .select('file_url, file_name')
               .eq('id', selectedMedia[0])
               .single();
 
             if (media) {
-              const { data: { session } } = await supabase.auth.getSession();
-              await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/youtube-publish`, {
+              let filePath: string | null = null;
+              
+              try {
+                const urlObj = new URL(media.file_url);
+                const pathParts = urlObj.pathname.split('/').filter(p => p);
+                const mediaIndex = pathParts.indexOf('media');
+                
+                if (mediaIndex !== -1 && mediaIndex < pathParts.length - 1) {
+                  filePath = pathParts.slice(mediaIndex + 1).join('/');
+                }
+              } catch (urlError) {
+                const urlParts = media.file_url.split('/');
+                const mediaIndex = urlParts.indexOf('media');
+                if (mediaIndex !== -1 && mediaIndex < urlParts.length - 1) {
+                  filePath = urlParts.slice(mediaIndex + 1).join('/');
+                }
+              }
+
+              if (!filePath) {
+                throw new Error('Could not extract file path from video URL');
+              }
+
+              const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/youtube-publish`, {
                 method: 'POST',
                 headers: {
-                  'Authorization': `Bearer ${session?.access_token}`,
+                  'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
                   'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -143,10 +164,21 @@ export function PostComposer() {
                   title,
                   description,
                   tags: tagsArray,
-                  videoUrl: media.file_url,
+                  filePath: filePath,
                   scheduledFor: scheduledFor,
                 }),
               });
+
+              if (!response.ok) {
+                const errorData = await response.json();
+                const errorMessage = errorData.error || 'Failed to publish to YouTube';
+                
+                if (errorMessage.includes('youtubeSignupRequired') || errorMessage.includes('YouTube channel not found')) {
+                  throw new Error('Please create a YouTube channel first. Go to youtube.com and create a channel for your Google account, then try again.');
+                }
+                
+                throw new Error(errorMessage);
+              }
             }
           }
         }

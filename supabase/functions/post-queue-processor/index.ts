@@ -16,8 +16,20 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    const authHeader = req.headers.get("Authorization");
+    const apikeyHeader = req.headers.get("apikey");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    
+    const providedKey = authHeader?.replace("Bearer ", "") || apikeyHeader;
+    
+    if (!providedKey || providedKey !== supabaseServiceKey) {
+      return new Response(
+        JSON.stringify({ error: "Unauthorized - Service role key required" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const now = new Date().toISOString();
@@ -29,6 +41,7 @@ Deno.serve(async (req: Request) => {
         user_id,
         title,
         description,
+        tags,
         media_ids,
         platforms,
         scheduled_for
@@ -76,6 +89,27 @@ Deno.serve(async (req: Request) => {
               throw new Error("Media not found");
             }
 
+            let filePath: string | null = null;
+            try {
+              const urlObj = new URL(media.file_url);
+              const pathParts = urlObj.pathname.split('/').filter(p => p);
+              const mediaIndex = pathParts.indexOf('media');
+              
+              if (mediaIndex !== -1 && mediaIndex < pathParts.length - 1) {
+                filePath = pathParts.slice(mediaIndex + 1).join('/');
+              }
+            } catch (urlError) {
+              const urlParts = media.file_url.split('/');
+              const mediaIndex = urlParts.indexOf('media');
+              if (mediaIndex !== -1 && mediaIndex < urlParts.length - 1) {
+                filePath = urlParts.slice(mediaIndex + 1).join('/');
+              }
+            }
+
+            if (!filePath) {
+              throw new Error("Could not extract file path from media URL");
+            }
+
             const publishResponse = await fetch(
               `${supabaseUrl}/functions/v1/youtube-publish`,
               {
@@ -90,8 +124,8 @@ Deno.serve(async (req: Request) => {
                   accountId: account.id,
                   title: post.title,
                   description: post.description || "",
-                  tags: post.tags || [],
-                  videoUrl: media.file_url,
+                  tags: Array.isArray(post.tags) ? post.tags : [],
+                  filePath: filePath,
                   scheduledFor: null,
                 }),
               }

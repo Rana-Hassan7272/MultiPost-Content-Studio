@@ -2,18 +2,31 @@ import { supabase } from '../lib/supabase';
 
 export async function getYouTubeAuthUrl(): Promise<string> {
   const { data: { session } } = await supabase.auth.getSession();
-  if (!session) throw new Error('Not authenticated');
+  if (!session) {
+    throw new Error('Not authenticated. Please sign in again.');
+  }
 
-  const response = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/youtube-oauth?action=auth_url`,
-    {
-      headers: {
-        'Authorization': `Bearer ${session.access_token}`,
-      },
-    }
-  );
+  const clientId = import.meta.env.VITE_YOUTUBE_CLIENT_ID;
+  let redirectUri = import.meta.env.VITE_YOUTUBE_REDIRECT_URI || `${window.location.origin}/`;
+  
+  redirectUri = redirectUri.trim();
+  if (!redirectUri.endsWith('/')) {
+    redirectUri = redirectUri + '/';
+  }
 
-  const { authUrl } = await response.json();
+  if (!clientId) {
+    throw new Error('YouTube Client ID not configured');
+  }
+
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+    `client_id=${clientId}&` +
+    `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+    `response_type=code&` +
+    `scope=${encodeURIComponent('https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/yt-analytics.readonly')}&` +
+    `access_type=offline&` +
+    `prompt=consent&` +
+    `state=${session.user.id}`;
+
   return authUrl;
 }
 

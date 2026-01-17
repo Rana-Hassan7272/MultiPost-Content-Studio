@@ -21,7 +21,45 @@ export function ConnectedAccounts() {
 
   useEffect(() => {
     loadAccounts();
+    checkStoredOAuth();
   }, [user]);
+
+  const checkStoredOAuth = async () => {
+    if (!user) return;
+    
+    const storedCode = localStorage.getItem('youtube_oauth_code');
+    const storedState = localStorage.getItem('youtube_oauth_state');
+    
+    if (!storedCode || !storedState) return;
+    
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/youtube-oauth?action=callback&code=${encodeURIComponent(storedCode)}&state=${encodeURIComponent(storedState)}`,
+        {
+          method: 'GET',
+          headers: {
+            'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const data = await response.json();
+      
+      if (response.ok && data.success) {
+        localStorage.removeItem('youtube_oauth_code');
+        localStorage.removeItem('youtube_oauth_state');
+        await loadAccounts();
+        alert('YouTube account connected successfully!');
+      } else {
+        console.error('Failed to process stored OAuth:', data);
+      }
+    } catch (error) {
+      console.error('Error processing stored OAuth:', error);
+    }
+  };
 
   const loadAccounts = async () => {
     if (!user) return;
@@ -46,10 +84,14 @@ export function ConnectedAccounts() {
     if (platform === 'youtube') {
       try {
         const authUrl = await getYouTubeAuthUrl();
+        console.log('Redirecting to:', authUrl);
+        if (!authUrl || authUrl.includes('undefined')) {
+          throw new Error('Invalid auth URL received');
+        }
         window.location.href = authUrl;
       } catch (error) {
         console.error('Error connecting YouTube:', error);
-        alert('Erreur lors de la connexion à YouTube');
+        alert('Erreur lors de la connexion à YouTube: ' + (error instanceof Error ? error.message : 'Unknown error'));
       }
     } else {
       setShowAddModal(true);

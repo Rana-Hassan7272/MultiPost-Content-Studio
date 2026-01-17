@@ -13,26 +13,48 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const authHeader = req.headers.get("Authorization")!;
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const clientId = Deno.env.get("YOUTUBE_CLIENT_ID")!;
     const clientSecret = Deno.env.get("YOUTUBE_CLIENT_SECRET")!;
-    const redirectUri = Deno.env.get("YOUTUBE_REDIRECT_URI") || `${req.headers.get("origin")}/auth/youtube/callback`;
-
-    const supabase = createClient(supabaseUrl, supabaseServiceKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
-
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
-      throw new Error("Unauthorized");
-    }
+    const redirectUri = Deno.env.get("YOUTUBE_REDIRECT_URI") || "http://localhost:5173/";
 
     const url = new URL(req.url);
     const action = url.searchParams.get("action");
 
     if (action === "auth_url") {
+      let userId = url.searchParams.get("userId");
+      
+      if (!userId && req.method === "POST") {
+        try {
+          const body = await req.json();
+          userId = body.userId;
+        } catch (e) {
+        }
+      }
+
+      if (!clientId) {
+        throw new Error("YOUTUBE_CLIENT_ID is not configured");
+      }
+      if (!redirectUri || redirectUri.includes('undefined')) {
+        throw new Error(`Invalid redirect URI: ${redirectUri}. Please set YOUTUBE_REDIRECT_URI secret in Supabase.`);
+      }
+
+      if (!userId) {
+        throw new Error("User ID is required. Pass userId as query parameter or in request body.");
+      }
+
+      const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+      const { data: profile } = await supabaseAdmin
+        .from("profiles")
+        .select("id")
+        .eq("id", userId)
+        .single();
+
+      if (!profile) {
+        throw new Error("Invalid user ID");
+      }
+
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
         `client_id=${clientId}&` +
         `redirect_uri=${encodeURIComponent(redirectUri)}&` +
@@ -40,7 +62,7 @@ Deno.serve(async (req: Request) => {
         `scope=${encodeURIComponent('https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/yt-analytics.readonly')}&` +
         `access_type=offline&` +
         `prompt=consent&` +
-        `state=${user.id}`;
+        `state=${userId}`;
 
       return new Response(
         JSON.stringify({ authUrl }),
@@ -54,6 +76,22 @@ Deno.serve(async (req: Request) => {
       
       if (!code) {
         throw new Error("No authorization code");
+      }
+
+      if (!state) {
+        throw new Error("No state parameter");
+      }
+
+      const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+      
+      const { data: profile } = await supabaseAdmin
+        .from("profiles")
+        .select("id")
+        .eq("id", state)
+        .single();
+
+      if (!profile) {
+        throw new Error("Invalid user ID in state parameter");
       }
 
       const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
@@ -93,17 +131,17 @@ Deno.serve(async (req: Request) => {
       const expiresAt = new Date(Date.now() + ((tokens.expires_in || 3600) * 1000)).toISOString();
 
       const accountData = {
-        user_id: state || user.id,
+        user_id: state,
         platform: "youtube",
         account_name: channel?.snippet?.title || "YouTube Channel",
-        account_id: channel?.id || `user_${state || user.id}`,
+        account_id: channel?.id || `user_${state}`,
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token || null,
         expires_at: expiresAt,
         is_active: true,
       };
 
-      const { error: dbError } = await supabase
+      const { error: dbError } = await supabaseAdmin
         .from("connected_accounts")
         .upsert(accountData, {
           onConflict: "user_id,platform,account_id"

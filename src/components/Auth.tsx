@@ -13,16 +13,32 @@ export function Auth() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (loading) return;
+    
     setError('');
     setLoading(true);
 
     try {
       if (isLogin) {
         const { error } = await signIn(email, password);
-        if (error) throw error;
+        if (error) {
+          setError(error.message || 'Failed to sign in. Please check your credentials.');
+          setLoading(false);
+          return;
+        }
       } else {
         const { error } = await signUp(email, password, fullName);
-        if (error) throw error;
+        if (error) {
+          setError(error.message || 'Failed to create account. Please try again.');
+          setLoading(false);
+          return;
+        }
+        setError('');
+        setEmail('');
+        setPassword('');
+        setFullName('');
+        setIsLogin(true);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');

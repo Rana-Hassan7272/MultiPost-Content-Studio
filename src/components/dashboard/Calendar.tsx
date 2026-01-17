@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
-import { ChevronLeft, ChevronRight, Clock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clock, Edit, Trash2, Eye } from 'lucide-react';
 
 interface Post {
   id: string;
@@ -18,10 +18,79 @@ export function Calendar() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedPost, setSelectedPost] = useState<Post | null>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editScheduledDate, setEditScheduledDate] = useState('');
+  const [editScheduledTime, setEditScheduledTime] = useState('');
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     loadScheduledPosts();
   }, [user]);
+
+  const handleEdit = (post: Post) => {
+    setSelectedPost(post);
+    setEditTitle(post.title);
+    setEditDescription(post.description || '');
+    if (post.scheduled_for) {
+      const date = new Date(post.scheduled_for);
+      setEditScheduledDate(date.toISOString().split('T')[0]);
+      setEditScheduledTime(date.toTimeString().slice(0, 5));
+    }
+    setShowEditModal(true);
+  };
+
+  const handleSave = async () => {
+    if (!selectedPost || !user) return;
+    setSaving(true);
+    try {
+      let scheduledFor = null;
+      if (editScheduledDate && editScheduledTime) {
+        scheduledFor = new Date(`${editScheduledDate}T${editScheduledTime}`).toISOString();
+      }
+
+      const { error } = await supabase
+        .from('posts')
+        .update({
+          title: editTitle,
+          description: editDescription,
+          scheduled_for: scheduledFor,
+        })
+        .eq('id', selectedPost.id)
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+      await loadScheduledPosts();
+      setShowEditModal(false);
+      setSelectedPost(null);
+    } catch (error) {
+      console.error('Error updating post:', error);
+      alert('Erreur lors de la mise à jour');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (postId: string) => {
+    if (!confirm('Êtes-vous sûr de vouloir supprimer cette publication ?')) return;
+    if (!user) return;
+
+    try {
+      const { error } = await supabase
+        .from('posts')
+        .delete()
+        .eq('id', postId)
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+      await loadScheduledPosts();
+    } catch (error) {
+      console.error('Error deleting post:', error);
+      alert('Erreur lors de la suppression');
+    }
+  };
 
   const loadScheduledPosts = async () => {
     if (!user) return;
@@ -213,7 +282,7 @@ export function Calendar() {
                     </span>
                   </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex items-center gap-2">
                   {post.platforms?.map((platform: string) => (
                     <div
                       key={platform}
@@ -223,6 +292,22 @@ export function Calendar() {
                       {platform.charAt(0).toUpperCase()}
                     </div>
                   ))}
+                  <div className="flex gap-1 ml-2">
+                    <button
+                      onClick={() => handleEdit(post)}
+                      className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                      title="Modifier"
+                    >
+                      <Edit className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(post.id)}
+                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+                      title="Supprimer"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -234,6 +319,79 @@ export function Calendar() {
           )}
         </div>
       </div>
+
+      {showEditModal && selectedPost && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-2xl w-full p-6 space-y-4">
+            <h3 className="text-xl font-bold text-slate-900">Modifier la publication</h3>
+            
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Titre
+              </label>
+              <input
+                type="text"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                className="w-full px-4 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Description
+              </label>
+              <textarea
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                rows={4}
+                className="w-full px-4 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Date
+                </label>
+                <input
+                  type="date"
+                  value={editScheduledDate}
+                  onChange={(e) => setEditScheduledDate(e.target.value)}
+                  className="w-full px-4 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Heure
+                </label>
+                <input
+                  type="time"
+                  value={editScheduledTime}
+                  onChange={(e) => setEditScheduledTime(e.target.value)}
+                  className="w-full px-4 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-4">
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="flex-1 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg font-medium hover:bg-slate-200 transition"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving || !editTitle}
+                className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 transition disabled:opacity-50"
+              >
+                {saving ? 'Enregistrement...' : 'Enregistrer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
