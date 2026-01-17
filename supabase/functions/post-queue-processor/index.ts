@@ -21,9 +21,22 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     
-    const providedKey = authHeader?.replace("Bearer ", "") || apikeyHeader;
+    if (!supabaseServiceKey) {
+      return new Response(
+        JSON.stringify({ error: "Service role key not configured" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
     
-    if (!providedKey || providedKey !== supabaseServiceKey) {
+    let providedKey: string | null = null;
+    
+    if (authHeader) {
+      providedKey = authHeader.replace(/^Bearer\s+/i, "").trim();
+    } else if (apikeyHeader) {
+      providedKey = apikeyHeader.trim();
+    }
+    
+    if (!providedKey || providedKey !== supabaseServiceKey.trim()) {
       return new Response(
         JSON.stringify({ error: "Unauthorized - Service role key required" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
