@@ -27,10 +27,15 @@ jobs:
 
       - name: Call Post Queue Processor
         run: |
+          # Trim whitespace/newlines from secrets (GitHub can store trailing newline when pasting)
+          SUPABASE_URL="${{ secrets.SUPABASE_URL }}"
+          SERVICE_KEY=$(echo -n "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          ANON_KEY=$(echo -n "${{ secrets.SUPABASE_ANON_KEY }}" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            "${{ secrets.SUPABASE_URL }}/functions/v1/post-queue-processor" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            "${SUPABASE_URL}/functions/v1/post-queue-processor" \
+            -H "Authorization: Bearer ${SERVICE_KEY}" \
+            -H "apikey: ${ANON_KEY}" \
             -H "Content-Type: application/json")
           
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
