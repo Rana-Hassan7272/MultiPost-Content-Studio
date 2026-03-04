@@ -25,15 +25,29 @@ jobs:
           fi
           echo "Secrets configured successfully"
 
-      - name: Call Post Queue Processor
+      - name: Debug secret length (remove after fix)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          RAW_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          # Trim whitespace/newlines from secrets (GitHub can store trailing newline when pasting)
-          SUPABASE_URL="${{ secrets.SUPABASE_URL }}"
-          SERVICE_KEY=$(echo -n "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          ANON_KEY=$(echo -n "${{ secrets.SUPABASE_ANON_KEY }}" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          TRIMMED_LEN=$(echo -n "$RAW_KEY" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | wc -c)
+          echo "SUPABASE_URL starts with: ${SUPABASE_URL:0:50}..."
+          echo "SERVICE_ROLE_KEY length (after trim): $TRIMMED_LEN"
+          echo "→ In Supabase Dashboard → API → service_role key, copy it and check length (e.g. in a local file: wc -c). It must match the number above."
+
+      - name: Call Post Queue Processor
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          # Trim whitespace/newlines (GitHub can store trailing newline when pasting)
+          SUPABASE_URL_TRIM=$(echo -n "$SUPABASE_URL" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          SERVICE_KEY=$(echo -n "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          ANON_KEY=$(echo -n "$SUPABASE_ANON_KEY" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
           
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            "${SUPABASE_URL}/functions/v1/post-queue-processor" \
+            "${SUPABASE_URL_TRIM}/functions/v1/post-queue-processor" \
             -H "Authorization: Bearer ${SERVICE_KEY}" \
             -H "apikey: ${ANON_KEY}" \
             -H "Content-Type: application/json")
