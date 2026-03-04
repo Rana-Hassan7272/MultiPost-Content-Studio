@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { DashboardNavContext, type DashboardView } from '../contexts/DashboardNavContext';
 import {
   LayoutDashboard,
   CalendarDays,
@@ -9,9 +10,11 @@ import {
   LogOut,
   Menu,
   X,
-  User,
   Link2,
-  BarChart3
+  BarChart3,
+  Clock,
+  Users,
+  TrendingUp
 } from 'lucide-react';
 import { Overview } from './dashboard/Overview';
 import { Calendar } from './dashboard/Calendar';
@@ -19,8 +22,13 @@ import { MediaLibrary } from './dashboard/MediaLibrary';
 import { PostComposer } from './dashboard/PostComposer';
 import { ConnectedAccounts } from './dashboard/ConnectedAccounts';
 import { Analytics } from './dashboard/Analytics';
+import { VoiceProfileSettings } from './dashboard/VoiceProfileSettings';
+import { SmartScheduling } from './dashboard/SmartScheduling';
+import { AudienceInsights } from './dashboard/AudienceInsights';
+import { PostPerformance } from './dashboard/PostPerformance';
+import { PredictionDashboard } from './dashboard/PredictionDashboard';
 
-type View = 'overview' | 'calendar' | 'media' | 'compose' | 'accounts' | 'analytics';
+type View = DashboardView;
 
 export function Dashboard() {
   const { signOut, user } = useAuth();
@@ -30,7 +38,7 @@ export function Dashboard() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const view = urlParams.get('view') as View;
-    if (view && ['overview', 'calendar', 'media', 'compose', 'accounts', 'analytics'].includes(view)) {
+    if (view && ['overview', 'calendar', 'media', 'compose', 'accounts', 'analytics', 'voice-profile', 'smart-scheduling', 'audience', 'performance', 'predictions'].includes(view)) {
       setCurrentView(view);
       window.history.replaceState({}, '', window.location.pathname);
     }
@@ -42,7 +50,12 @@ export function Dashboard() {
     { id: 'calendar', name: 'Calendrier', icon: CalendarDays },
     { id: 'media', name: 'Médias', icon: ImagePlus },
     { id: 'analytics', name: 'Analytics', icon: BarChart3 },
+    { id: 'performance', name: 'Performance', icon: TrendingUp },
+    { id: 'predictions', name: 'Predictions', icon: TrendingUp },
+    { id: 'smart-scheduling', name: 'Smart Scheduling', icon: Clock },
+    { id: 'audience', name: 'Audience', icon: Users },
     { id: 'accounts', name: 'Comptes liés', icon: Link2 },
+    { id: 'voice-profile', name: 'Profil de voix', icon: Settings },
   ];
 
   const renderView = () => {
@@ -59,6 +72,16 @@ export function Dashboard() {
         return <ConnectedAccounts />;
       case 'analytics':
         return <Analytics />;
+      case 'voice-profile':
+        return <VoiceProfileSettings />;
+      case 'smart-scheduling':
+        return <SmartScheduling />;
+      case 'audience':
+        return <AudienceInsights />;
+      case 'performance':
+        return <PostPerformance />;
+      case 'predictions':
+        return <PredictionDashboard />;
       default:
         return <Overview />;
     }
@@ -66,6 +89,7 @@ export function Dashboard() {
 
   return (
     <div className="min-h-screen bg-slate-50">
+      <DashboardNavContext.Provider value={(view) => setCurrentView(view)}>
       <div className="lg:hidden fixed top-0 left-0 right-0 bg-white border-b border-slate-200 z-50 px-4 py-3 flex items-center justify-between">
         <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-cyan-600 bg-clip-text text-transparent">
           ContentFlow
@@ -148,6 +172,7 @@ export function Dashboard() {
           </div>
         </main>
       </div>
+    </DashboardNavContext.Provider>
     </div>
   );
 }

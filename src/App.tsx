@@ -16,40 +16,51 @@ function AppContent() {
     
     const processCallback = async () => {
       if (code && state) {
+        const isInstagram = state.startsWith('instagram_');
+        const storageKey = isInstagram ? 'instagram_oauth' : 'youtube_oauth';
         if (user) {
           await new Promise(resolve => setTimeout(resolve, 1000));
           const { data: { session } } = await supabase.auth.getSession();
           if (session && session.access_token) {
-            await handleYoutubeCallback(code, state);
+            if (isInstagram) {
+              await handleInstagramCallback(code, state);
+            } else {
+              await handleYoutubeCallback(code, state);
+            }
           } else {
-            localStorage.setItem('youtube_oauth_code', code);
-            localStorage.setItem('youtube_oauth_state', state);
+            localStorage.setItem(`${storageKey}_code`, code);
+            localStorage.setItem(`${storageKey}_state`, state);
             window.history.replaceState({}, '', '/');
-            alert('Session expired. Please sign in again. After signing in, the YouTube connection will complete automatically.');
+            alert('Session expired. Please sign in again. After signing in, the connection will complete automatically.');
           }
         } else if (!loading) {
-          localStorage.setItem('youtube_oauth_code', code);
-          localStorage.setItem('youtube_oauth_state', state);
+          localStorage.setItem(`${storageKey}_code`, code);
+          localStorage.setItem(`${storageKey}_state`, state);
           window.history.replaceState({}, '', '/');
         }
       } else if (user && !loading) {
         await new Promise(resolve => setTimeout(resolve, 1500));
-        const storedCode = localStorage.getItem('youtube_oauth_code');
-        const storedState = localStorage.getItem('youtube_oauth_state');
-        if (storedCode && storedState) {
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session && session.access_token) {
-            console.log('Processing stored YouTube OAuth callback...');
-            await handleYoutubeCallback(storedCode, storedState);
-          } else {
-            console.log('Waiting for session to be ready...');
-            setTimeout(async () => {
-              const { data: { session: retrySession } } = await supabase.auth.getSession();
-              if (retrySession && retrySession.access_token) {
-                await handleYoutubeCallback(storedCode, storedState);
-              }
-            }, 2000);
+        const storedYtCode = localStorage.getItem('youtube_oauth_code');
+        const storedYtState = localStorage.getItem('youtube_oauth_state');
+        const storedIgCode = localStorage.getItem('instagram_oauth_code');
+        const storedIgState = localStorage.getItem('instagram_oauth_state');
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session && session.access_token) {
+          if (storedIgCode && storedIgState) {
+            await handleInstagramCallback(storedIgCode, storedIgState);
+          } else if (storedYtCode && storedYtState) {
+            await handleYoutubeCallback(storedYtCode, storedYtState);
           }
+        } else if (storedYtCode && storedYtState) {
+          setTimeout(async () => {
+            const { data: { session: retrySession } } = await supabase.auth.getSession();
+            if (retrySession?.access_token) await handleYoutubeCallback(storedYtCode, storedYtState);
+          }, 2000);
+        } else if (storedIgCode && storedIgState) {
+          setTimeout(async () => {
+            const { data: { session: retrySession } } = await supabase.auth.getSession();
+            if (retrySession?.access_token) await handleInstagramCallback(storedIgCode, storedIgState);
+          }, 2000);
         }
       }
     };
@@ -58,6 +69,34 @@ function AppContent() {
       processCallback();
     }
   }, [user, loading]);
+
+  const handleInstagramCallback = async (code: string, state: string) => {
+    try {
+      const functionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/instagram-oauth?action=callback&code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
+      const response = await fetch(functionUrl, {
+        method: 'GET',
+        headers: { 'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.success) {
+        localStorage.removeItem('instagram_oauth_code');
+        localStorage.removeItem('instagram_oauth_state');
+        window.history.replaceState({}, '', '/?view=accounts');
+        setTimeout(() => window.location.reload(), 500);
+      } else {
+        localStorage.removeItem('instagram_oauth_code');
+        localStorage.removeItem('instagram_oauth_state');
+        window.history.replaceState({}, '', '/');
+        alert('Failed to connect Instagram: ' + (data.error || data.message || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error('Instagram callback error:', error);
+      localStorage.removeItem('instagram_oauth_code');
+      localStorage.removeItem('instagram_oauth_state');
+      window.history.replaceState({}, '', '/');
+      alert('Failed to connect Instagram. Please try again.');
+    }
+  };
 
   const handleYoutubeCallback = async (code: string, state: string) => {
     try {

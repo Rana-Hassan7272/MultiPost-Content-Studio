@@ -7,6 +7,9 @@ interface GenerateContentParams {
   videoDescription?: string;
   keywords?: string[];
   voiceProfileId?: string;
+  videoThumbnail?: string;
+  mediaId?: string;
+  videoFileName?: string;
 }
 
 export async function generateAIContent(params: GenerateContentParams) {

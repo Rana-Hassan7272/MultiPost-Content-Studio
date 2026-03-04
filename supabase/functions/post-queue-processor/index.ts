@@ -1,6 +1,19 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
+function computeNextRunAt(after: Date, daysOfWeek: number[], timeLocal: string): string {
+  const [hours, minutes] = timeLocal.split(":").map(Number);
+  const d = new Date(after);
+  d.setUTCDate(d.getUTCDate() + 1);
+  d.setUTCHours(hours, minutes ?? 0, 0, 0);
+  for (let i = 0; i < 8; i++) {
+    const c = new Date(d);
+    c.setUTCDate(c.getUTCDate() + i);
+    if (daysOfWeek.includes(c.getUTCDay())) return c.toISOString();
+  }
+  return d.toISOString();
+}
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
@@ -45,18 +58,80 @@ Deno.serve(async (req: Request) => {
       );
     }
     
-    if (providedKey !== expectedKey) {
-      console.error("Service role key mismatch");
+    const providedKeyTrimmed = providedKey.trim();
+    const expectedKeyTrimmed = expectedKey.trim();
+    
+    if (providedKeyTrimmed !== expectedKeyTrimmed) {
+      console.error("Service role key mismatch", {
+        providedKeyPrefix: providedKeyTrimmed.substring(0, 20) + "...",
+        expectedKeyPrefix: expectedKeyTrimmed.substring(0, 20) + "...",
+        providedKeyLength: providedKeyTrimmed.length,
+        expectedKeyLength: expectedKeyTrimmed.length
+      });
       return new Response(
-        JSON.stringify({ error: "Unauthorized - Invalid service role key" }),
+        JSON.stringify({ 
+          error: "Unauthorized - Invalid service role key",
+          hint: "Verify SUPABASE_SERVICE_ROLE_KEY in GitHub secrets matches Supabase service role key"
+        }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const now = new Date().toISOString();
+    const now = new Date();
+    const nowISO = now.toISOString();
 
+    // 1) Process recurring schedules: create posts for due recurrences and advance next_run_at
+    const { data: dueRecurring, error: recurringFetchError } = await supabase
+      .from("recurring_schedules")
+      .select("*")
+      .eq("is_active", true)
+      .lte("next_run_at", nowISO)
+      .limit(5);
+
+    if (!recurringFetchError && dueRecurring && dueRecurring.length > 0) {
+      for (const rec of dueRecurring) {
+        try {
+          const [hours, minutes] = (rec.time_local as string).split(":").map(Number);
+          const { data: newPost, error: insertPostError } = await supabase
+            .from("posts")
+            .insert({
+              user_id: rec.user_id,
+              title: rec.title,
+              description: rec.description ?? null,
+              tags: Array.isArray(rec.tags) ? rec.tags : [],
+              media_ids: Array.isArray(rec.media_ids) ? rec.media_ids : [],
+              platforms: rec.platforms,
+              status: "scheduled",
+              scheduled_for: rec.next_run_at,
+            })
+            .select("id")
+            .single();
+          if (insertPostError || !newPost) throw new Error(insertPostError?.message || "Failed to create post");
+          for (const platform of rec.platforms) {
+            await supabase.from("platform_posts").insert({
+              post_id: newPost.id,
+              platform,
+              status: "pending",
+            });
+          }
+          const nextRun = computeNextRunAt(
+            new Date(rec.next_run_at),
+            rec.days_of_week as number[],
+            rec.time_local as string
+          );
+          await supabase
+            .from("recurring_schedules")
+            .update({ next_run_at: nextRun, updated_at: nowISO })
+            .eq("id", rec.id);
+        } catch (e) {
+          console.error("Recurring schedule error", rec.id, e);
+        }
+      }
+    }
+
+    // 2) Process one-time scheduled posts
     const { data: scheduledPosts, error: fetchError } = await supabase
       .from("posts")
       .select(`
@@ -70,7 +145,7 @@ Deno.serve(async (req: Request) => {
         scheduled_for
       `)
       .eq("status", "scheduled")
-      .lte("scheduled_for", now)
+      .lte("scheduled_for", nowISO)
       .limit(10);
 
     if (fetchError) {
@@ -79,7 +154,7 @@ Deno.serve(async (req: Request) => {
 
     if (!scheduledPosts || scheduledPosts.length === 0) {
       return new Response(
-        JSON.stringify({ message: "No posts to process", processed: 0 }),
+        JSON.stringify({ message: "No posts to process", processed: 0, recurringProcessed: dueRecurring?.length ?? 0 }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -170,6 +245,76 @@ Deno.serve(async (req: Request) => {
               })
               .eq("post_id", post.id)
               .eq("platform", "youtube");
+          } else if (platform === "instagram") {
+            const { data: igAccount } = await supabase
+              .from("connected_accounts")
+              .select("id")
+              .eq("user_id", post.user_id)
+              .eq("platform", "instagram")
+              .eq("is_active", true)
+              .single();
+
+            if (!igAccount) {
+              throw new Error("No active Instagram account connected");
+            }
+
+            const { data: media } = await supabase
+              .from("media_library")
+              .select("file_url, file_type")
+              .eq("id", post.media_ids[0])
+              .single();
+
+            if (!media) {
+              throw new Error("Media not found");
+            }
+
+            let filePath: string | null = null;
+            try {
+              const urlObj = new URL(media.file_url);
+              const pathParts = urlObj.pathname.split("/").filter((p: string) => p);
+              const mediaIndex = pathParts.indexOf("media");
+              if (mediaIndex !== -1 && mediaIndex < pathParts.length - 1) {
+                filePath = pathParts.slice(mediaIndex + 1).join("/");
+              }
+            } catch {
+              const urlParts = media.file_url.split("/");
+              const mediaIndex = urlParts.indexOf("media");
+              if (mediaIndex !== -1 && mediaIndex < urlParts.length - 1) {
+                filePath = urlParts.slice(mediaIndex + 1).join("/");
+              }
+            }
+
+            if (!filePath) {
+              throw new Error("Could not extract file path from media URL");
+            }
+
+            const caption = [post.title, post.description].filter(Boolean).join("\n\n");
+            const mediaType = media.file_type === "video" ? "video" : "image";
+
+            const igPublishResponse = await fetch(
+              `${supabaseUrl}/functions/v1/instagram-publish`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${supabaseServiceKey}`,
+                  apikey: supabaseServiceKey,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  postId: post.id,
+                  accountId: igAccount.id,
+                  caption,
+                  filePath,
+                  mediaType,
+                }),
+              }
+            );
+
+            if (!igPublishResponse.ok && igPublishResponse.status !== 202) {
+              const err = await igPublishResponse.json();
+              throw new Error(err.error || "Instagram publish failed");
+            }
+            // 202 = video queued for async completion (instagram-publish-complete will finish it)
           } else {
             await supabase.from("platform_posts").insert({
               post_id: post.id,
@@ -184,7 +329,7 @@ Deno.serve(async (req: Request) => {
           .from("posts")
           .update({
             status: "published",
-            published_at: now,
+            published_at: nowISO,
           })
           .eq("id", post.id);
 
@@ -207,6 +352,20 @@ Deno.serve(async (req: Request) => {
 
         results.push({ postId: post.id, success: false, error: error.message });
       }
+    }
+
+    // Finish any Instagram videos that were queued (status = processing)
+    try {
+      await fetch(`${supabaseUrl}/functions/v1/instagram-publish-complete`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${supabaseServiceKey}`,
+          apikey: supabaseServiceKey,
+          "Content-Type": "application/json",
+        },
+      });
+    } catch (e) {
+      console.error("instagram-publish-complete call failed:", e);
     }
 
     return new Response(

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
+import { useDashboardNav } from '../../contexts/DashboardNavContext';
 import { ChevronLeft, ChevronRight, Clock, Edit, Trash2, Eye } from 'lucide-react';
 
 interface Post {
@@ -15,6 +16,7 @@ interface Post {
 
 export function Calendar() {
   const { user } = useAuth();
+  const navigate = useDashboardNav();
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -25,6 +27,8 @@ export function Calendar() {
   const [editScheduledDate, setEditScheduledDate] = useState('');
   const [editScheduledTime, setEditScheduledTime] = useState('');
   const [saving, setSaving] = useState(false);
+  const [draggingPostId, setDraggingPostId] = useState<string | null>(null);
+  const [dropTargetDay, setDropTargetDay] = useState<string | null>(null);
 
   useEffect(() => {
     loadScheduledPosts();
@@ -89,6 +93,36 @@ export function Calendar() {
     } catch (error) {
       console.error('Error deleting post:', error);
       alert('Erreur lors de la suppression');
+    }
+  };
+
+  const handleDropOnDay = async (postId: string, targetDate: Date) => {
+    if (!user) return;
+    const post = posts.find(p => p.id === postId);
+    if (!post) return;
+
+    const newScheduled = new Date(targetDate);
+    if (post.scheduled_for) {
+      const old = new Date(post.scheduled_for);
+      newScheduled.setHours(old.getHours(), old.getMinutes(), 0, 0);
+    } else {
+      newScheduled.setHours(9, 0, 0, 0);
+    }
+
+    try {
+      const { error } = await supabase
+        .from('posts')
+        .update({ scheduled_for: newScheduled.toISOString() })
+        .eq('id', postId)
+        .eq('user_id', user.id);
+      if (error) throw error;
+      await loadScheduledPosts();
+    } catch (error) {
+      console.error('Error rescheduling post:', error);
+      alert('Erreur lors du déplacement');
+    } finally {
+      setDraggingPostId(null);
+      setDropTargetDay(null);
     }
   };
 
@@ -262,7 +296,17 @@ export function Calendar() {
         </div>
         <div className="divide-y divide-slate-200">
           {posts.slice(0, 10).map(post => (
-            <div key={post.id} className="p-6 hover:bg-slate-50 transition">
+            <div
+              key={post.id}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData('text/plain', post.id);
+                e.dataTransfer.effectAllowed = 'move';
+                setDraggingPostId(post.id);
+              }}
+              onDragEnd={() => { setDraggingPostId(null); setDropTargetDay(null); }}
+              className={`p-6 hover:bg-slate-50 transition ${draggingPostId === post.id ? 'opacity-50' : ''} cursor-grab active:cursor-grabbing`}
+            >
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1">
                   <h3 className="font-semibold text-slate-900">{post.title}</h3>
@@ -313,8 +357,15 @@ export function Calendar() {
             </div>
           ))}
           {posts.length === 0 && (
-            <div className="p-8 text-center text-slate-500">
-              Aucune publication planifiée
+            <div className="p-12 text-center">
+              <p className="text-slate-500 mb-4">Aucune publication planifiée</p>
+              <button
+                type="button"
+                onClick={() => navigate('compose')}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition"
+              >
+                Créer une publication planifiée
+              </button>
             </div>
           )}
         </div>

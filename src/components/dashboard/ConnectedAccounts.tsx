@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { Youtube, Instagram, Video, Plus, Trash2, CheckCircle, XCircle } from 'lucide-react';
 import { getYouTubeAuthUrl } from '../../services/youtubeService';
+import { getInstagramAuthUrl, isInstagramConfigured } from '../../services/instagramService';
 
 interface ConnectedAccount {
   id: string;
@@ -84,7 +85,6 @@ export function ConnectedAccounts() {
     if (platform === 'youtube') {
       try {
         const authUrl = await getYouTubeAuthUrl();
-        console.log('Redirecting to:', authUrl);
         if (!authUrl || authUrl.includes('undefined')) {
           throw new Error('Invalid auth URL received');
         }
@@ -93,9 +93,22 @@ export function ConnectedAccounts() {
         console.error('Error connecting YouTube:', error);
         alert('Erreur lors de la connexion à YouTube: ' + (error instanceof Error ? error.message : 'Unknown error'));
       }
-    } else {
-      setShowAddModal(true);
+      return;
     }
+    if (platform === 'instagram' && isInstagramConfigured()) {
+      try {
+        const authUrl = await getInstagramAuthUrl();
+        if (!authUrl || authUrl.includes('undefined')) {
+          throw new Error('Invalid auth URL received');
+        }
+        window.location.href = authUrl;
+      } catch (error) {
+        console.error('Error connecting Instagram:', error);
+        alert('Erreur lors de la connexion à Instagram: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      }
+      return;
+    }
+    setShowAddModal(true);
   };
 
   const handleDisconnect = async (id: string) => {
@@ -166,7 +179,9 @@ export function ConnectedAccounts() {
           <div className="flex-1">
             <h3 className="font-semibold text-slate-900">Connexion aux réseaux sociaux</h3>
             <p className="text-sm text-slate-600 mt-1">
-              L'intégration OAuth avec les plateformes nécessite une configuration API. Utilisez les boutons ci-dessous pour simuler des connexions.
+              {accounts.length === 0
+                ? "Connectez au moins un compte (YouTube ou Instagram) pour publier et suivre vos statistiques."
+                : "L'intégration OAuth avec les plateformes nécessite une configuration API. Utilisez les boutons ci-dessous pour simuler des connexions."}
             </p>
           </div>
         </div>

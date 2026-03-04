@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
-import { TrendingUp, Users, Eye, Heart, Calendar, FileText } from 'lucide-react';
+import { useDashboardNav } from '../../contexts/DashboardNavContext';
+import { TrendingUp, Users, Eye, Heart, Calendar, FileText, Clock, ArrowRight, BarChart3, Link2, FilePlus } from 'lucide-react';
+import { getRecommendedPostingTime, getAudienceInsights } from '../../services/analyticsService';
 
 export function Overview() {
   const { user } = useAuth();
+  const navigate = useDashboardNav();
   const [stats, setStats] = useState({
     totalPosts: 0,
     scheduledPosts: 0,
@@ -15,6 +18,8 @@ export function Overview() {
   });
   const [recentPosts, setRecentPosts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [recommendedTime, setRecommendedTime] = useState<{ day: number; hour: number; label: string } | null>(null);
+  const [audienceInsights, setAudienceInsights] = useState<{ growthRate: number; avgEngagement: number } | null>(null);
 
   useEffect(() => {
     loadDashboardData();
@@ -45,8 +50,10 @@ export function Overview() {
 
       posts.forEach((post: any) => {
         post.platform_posts?.forEach((pp: any) => {
-          totalViews += pp.views || 0;
-          totalLikes += pp.likes || 0;
+          if (pp.status === 'published' && pp.platform_post_id) {
+            totalViews += pp.views || 0;
+            totalLikes += pp.likes || 0;
+          }
         });
       });
 
@@ -59,7 +66,22 @@ export function Overview() {
         connectedAccounts: accounts.length,
       });
 
-      setRecentPosts(platformPostsResult.data || []);
+      setRecentPosts(
+        (platformPostsResult.data || []).filter((post: any) =>
+          post.platform_posts?.some((pp: any) => pp.status === 'published' && pp.platform_post_id)
+        )
+      );
+
+      try {
+        const [ytRecommendation, insights] = await Promise.all([
+          getRecommendedPostingTime('youtube'),
+          getAudienceInsights()
+        ]);
+        setRecommendedTime(ytRecommendation);
+        setAudienceInsights({ growthRate: insights.growthRate, avgEngagement: insights.avgEngagement });
+      } catch (err) {
+        console.log('Could not load analytics insights');
+      }
     } catch (error) {
       console.error('Error loading dashboard data:', error);
     } finally {
@@ -100,6 +122,42 @@ export function Overview() {
         <p className="text-slate-600 mt-2">Vue d'ensemble de votre activité</p>
       </div>
 
+      {stats.connectedAccounts === 0 ? (
+        <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-2xl border-2 border-dashed border-blue-200 p-12 text-center">
+          <div className="inline-flex p-4 rounded-full bg-blue-100 text-blue-600 mb-4">
+            <Link2 className="w-12 h-12" />
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900 mb-2">Connectez votre premier compte</h2>
+          <p className="text-slate-600 mb-6 max-w-md mx-auto">
+            Liez votre compte YouTube ou Instagram pour publier et suivre vos statistiques en un seul endroit.
+          </p>
+          <button
+            onClick={() => navigate('accounts')}
+            className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 transition"
+          >
+            <Link2 className="w-5 h-5" />
+            Comptes liés
+          </button>
+        </div>
+      ) : stats.totalPosts === 0 ? (
+        <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl border-2 border-dashed border-emerald-200 p-12 text-center">
+          <div className="inline-flex p-4 rounded-full bg-emerald-100 text-emerald-600 mb-4">
+            <FilePlus className="w-12 h-12" />
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900 mb-2">Créez votre première publication</h2>
+          <p className="text-slate-600 mb-6 max-w-md mx-auto">
+            Rédigez un post et publiez-le sur YouTube ou Instagram, ou planifiez-le pour plus tard.
+          </p>
+          <button
+            onClick={() => navigate('compose')}
+            className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-600 text-white font-medium rounded-xl hover:bg-emerald-700 transition"
+          >
+            <FilePlus className="w-5 h-5" />
+            Créer une publication
+          </button>
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {statCards.map((stat) => {
           const Icon = stat.icon;
@@ -122,14 +180,61 @@ export function Overview() {
         })}
       </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {recommendedTime && (
+          <div className="bg-gradient-to-r from-blue-600 to-cyan-600 rounded-xl p-6 text-white">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-white/20 rounded-lg">
+                <Clock className="w-8 h-8" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold mb-1">Best Time to Post</h3>
+                <p className="text-blue-100 text-sm mb-3">Based on your audience engagement</p>
+                <p className="text-2xl font-bold">{recommendedTime.label}</p>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {audienceInsights && (
+          <div className="bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl p-6 text-white">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-white/20 rounded-lg">
+                <BarChart3 className="w-8 h-8" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold mb-1">Quick Insights</h3>
+                <div className="grid grid-cols-2 gap-4 mt-3">
+                  <div>
+                    <p className="text-purple-100 text-xs">Growth Rate</p>
+                    <p className="text-2xl font-bold">{audienceInsights.growthRate > 0 ? '+' : ''}{audienceInsights.growthRate}%</p>
+                  </div>
+                  <div>
+                    <p className="text-purple-100 text-xs">Avg Engagement</p>
+                    <p className="text-2xl font-bold">{audienceInsights.avgEngagement}%</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="p-6 border-b border-slate-200">
           <h2 className="text-xl font-bold text-slate-900">Publications récentes</h2>
         </div>
         <div className="divide-y divide-slate-200">
           {recentPosts.length === 0 ? (
-            <div className="p-8 text-center text-slate-500">
-              Aucune publication pour le moment. Créez votre première publication !
+            <div className="p-12 text-center">
+              <p className="text-slate-500 mb-4">Aucune publication pour le moment.</p>
+              <button
+                onClick={() => navigate('compose')}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition"
+              >
+                <FilePlus className="w-4 h-4" />
+                Créer une publication
+              </button>
             </div>
           ) : (
             recentPosts.map((post) => (

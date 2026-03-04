@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
-import { TrendingUp, Eye, Heart, Share2, MessageCircle, Youtube, Instagram, Video } from 'lucide-react';
+import { useDashboardNav } from '../../contexts/DashboardNavContext';
+import { TrendingUp, Eye, Heart, Share2, MessageCircle, Youtube, Instagram, Video, RefreshCw, Download, Calendar } from 'lucide-react';
 
 interface PlatformStats {
   platform: string;
@@ -12,21 +13,57 @@ interface PlatformStats {
   posts: number;
 }
 
+function getDefaultDateRange(): { from: string; to: string } {
+  const to = new Date();
+  const from = new Date(to);
+  from.setDate(from.getDate() - 30);
+  return {
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10),
+  };
+}
+
 export function Analytics() {
   const { user } = useAuth();
+  const navigate = useDashboardNav();
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [platformStats, setPlatformStats] = useState<PlatformStats[]>([]);
   const [topPosts, setTopPosts] = useState<any[]>([]);
+  const [dateRange, setDateRange] = useState(getDefaultDateRange);
+  const [rawPlatformPosts, setRawPlatformPosts] = useState<any[]>([]);
 
   useEffect(() => {
     loadAnalytics();
-  }, [user]);
+  }, [user, dateRange]);
+
+  const handleRefreshMetrics = async () => {
+    setSyncing(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Not signed in');
+      const { error } = await supabase.functions.invoke('sync-platform-metrics', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (error) throw error;
+      await loadAnalytics();
+    } catch (error) {
+      console.error('Error syncing metrics:', error);
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const loadAnalytics = async () => {
     if (!user) return;
 
     try {
-      const { data: platformPosts, error } = await supabase
+      const fromDate = new Date(dateRange.from);
+      fromDate.setHours(0, 0, 0, 0);
+      const toDate = new Date(dateRange.to);
+      toDate.setHours(23, 59, 59, 999);
+
+      let query = supabase
         .from('platform_posts')
         .select(`
           *,
@@ -36,9 +73,18 @@ export function Analytics() {
             platforms
           )
         `)
-        .eq('posts.user_id', user.id);
+        .eq('posts.user_id', user.id)
+        .eq('status', 'published')
+        .not('platform_post_id', 'is', null)
+        .not('published_at', 'is', null)
+        .gte('published_at', fromDate.toISOString())
+        .lte('published_at', toDate.toISOString());
+
+      const { data: platformPosts, error } = await query;
 
       if (error) throw error;
+
+      setRawPlatformPosts(platformPosts || []);
 
       const stats: Record<string, PlatformStats> = {};
       const postsByPlatform: Record<string, any[]> = {};
@@ -66,7 +112,7 @@ export function Analytics() {
         }
         postsByPlatform[platform].push({
           ...pp,
-          title: pp.posts.title,
+          title: pp.posts?.title ?? 'Sans titre',
           engagement: (pp.likes || 0) + (pp.comments || 0) + (pp.shares || 0),
         });
       });
@@ -88,6 +134,50 @@ export function Analytics() {
   const totalComments = platformStats.reduce((sum, s) => sum + s.comments, 0);
   const totalShares = platformStats.reduce((sum, s) => sum + s.shares, 0);
 
+  const viewsByDay = useMemo(() => {
+    const byDay: Record<string, number> = {};
+    rawPlatformPosts.forEach((pp: any) => {
+      if (!pp.published_at) return;
+      const day = pp.published_at.slice(0, 10);
+      byDay[day] = (byDay[day] || 0) + (pp.views || 0);
+    });
+    const sorted = Object.entries(byDay).sort(([a], [b]) => a.localeCompare(b));
+    return sorted.map(([date, views]) => ({ date, views }));
+  }, [rawPlatformPosts]);
+
+  const maxViewsInChart = Math.max(1, ...viewsByDay.map(d => d.views));
+
+  const exportCSV = () => {
+    const headers = ['Title', 'Platform', 'Published at', 'Views', 'Likes', 'Comments', 'Shares'];
+    const rows = rawPlatformPosts.map((pp: any) => [
+      (pp.posts?.title ?? '').replace(/"/g, '""'),
+      pp.platform,
+      pp.published_at ? new Date(pp.published_at).toISOString() : '',
+      pp.views ?? 0,
+      pp.likes ?? 0,
+      pp.comments ?? 0,
+      pp.shares ?? 0,
+    ]);
+    const csv = [headers.join(','), ...rows.map(r => r.map(c => `"${String(c)}"`).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `analytics-${dateRange.from}-${dateRange.to}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const setPresetRange = (days: number) => {
+    const to = new Date();
+    const from = new Date(to);
+    from.setDate(from.getDate() - days);
+    setDateRange({
+      from: from.toISOString().slice(0, 10),
+      to: to.toISOString().slice(0, 10),
+    });
+  };
+
   const platformIcons: Record<string, any> = {
     youtube: { icon: Youtube, color: 'text-red-500', bgColor: 'bg-red-50' },
     instagram: { icon: Instagram, color: 'text-pink-500', bgColor: 'bg-pink-50' },
@@ -104,9 +194,50 @@ export function Analytics() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-slate-900">Analytics</h1>
-        <p className="text-slate-600 mt-2">Suivez les performances de vos publications</p>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-900">Analytics</h1>
+          <p className="text-slate-600 mt-2">Suivez les performances de vos publications</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-2">
+            <Calendar className="w-4 h-4 text-slate-500" />
+            <button type="button" onClick={() => setPresetRange(7)} className="px-3 py-1.5 rounded text-sm font-medium text-slate-600 hover:bg-slate-100 transition">7j</button>
+            <button type="button" onClick={() => setPresetRange(30)} className="px-3 py-1.5 rounded text-sm font-medium text-slate-600 hover:bg-slate-100 transition">30j</button>
+            <button type="button" onClick={() => setPresetRange(90)} className="px-3 py-1.5 rounded text-sm font-medium text-slate-600 hover:bg-slate-100 transition">90j</button>
+            <input
+              type="date"
+              value={dateRange.from}
+              onChange={(e) => setDateRange((r) => ({ ...r, from: e.target.value }))}
+              className="ml-1 border border-slate-200 rounded px-2 py-1.5 text-sm"
+            />
+            <span className="text-slate-400">→</span>
+            <input
+              type="date"
+              value={dateRange.to}
+              onChange={(e) => setDateRange((r) => ({ ...r, to: e.target.value }))}
+              className="border border-slate-200 rounded px-2 py-1.5 text-sm"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={exportCSV}
+            disabled={rawPlatformPosts.length === 0}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <Download className="w-4 h-4" />
+            Export CSV
+          </button>
+          <button
+            type="button"
+            onClick={handleRefreshMetrics}
+            disabled={syncing}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Syncing…' : 'Refresh metrics'}
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -158,6 +289,32 @@ export function Analytics() {
           </div>
         </div>
       </div>
+
+      {viewsByDay.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="p-6 border-b border-slate-200">
+            <h2 className="text-xl font-bold text-slate-900">Vues par jour</h2>
+            <p className="text-sm text-slate-600 mt-1">Période : {dateRange.from} → {dateRange.to}</p>
+          </div>
+          <div className="p-6">
+            <div className="flex items-end gap-1 h-48">
+              {viewsByDay.map(({ date, views }) => (
+                <div
+                  key={date}
+                  className="flex-1 min-w-[8px] flex flex-col items-center gap-1"
+                  title={`${date}: ${views.toLocaleString()} vues`}
+                >
+                  <div
+                    className="w-full bg-blue-500 rounded-t transition hover:bg-blue-600"
+                    style={{ height: `${Math.max(4, (views / maxViewsInChart) * 100)}%` }}
+                  />
+                  <span className="text-xs text-slate-500 truncate max-w-full">{date.slice(5)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -215,7 +372,14 @@ export function Analytics() {
           <div className="divide-y divide-slate-200">
             {topPosts.length === 0 ? (
               <div className="p-8 text-center text-slate-500">
-                Aucune publication avec des statistiques
+                <p className="mb-4">Aucune publication avec des statistiques</p>
+                <button
+                  type="button"
+                  onClick={() => navigate('compose')}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition"
+                >
+                  Create post
+                </button>
               </div>
             ) : (
               topPosts.map((post, index) => {
