@@ -5,9 +5,7 @@ import {
   Eye, 
   Heart, 
   MessageCircle, 
-  Share2,
   TrendingUp,
-  TrendingDown,
   Calendar,
   Filter,
   Youtube,
@@ -28,6 +26,7 @@ const platformIcons: Record<string, any> = {
 
 export function PostPerformance() {
   const { user } = useAuth();
+  const navigate = useDashboardNav();
   const [loading, setLoading] = useState(true);
   const [posts, setPosts] = useState<PostPerformanceType[]>([]);
   const [sortBy, setSortBy] = useState<'views' | 'engagement' | 'date'>('date');
@@ -272,7 +271,7 @@ export function PostPerformance() {
           </div>
         ) : (
           <div className="divide-y divide-slate-200">
-            {sortedPosts.map((post, index) => {
+            {sortedPosts.map((post) => {
               const platformIcon = platformIcons[post.platform];
               const Icon = platformIcon?.icon;
               const engagementBadge = getEngagementBadge(post.engagement_rate);

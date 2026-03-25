@@ -1,8 +1,10 @@
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
-import { Upload, Image as ImageIcon, Video, Trash2, Search, X } from 'lucide-react';
-import { uploadMedia, deleteMedia } from '../../services/mediaService';
+import { useSubscription } from '../../contexts/SubscriptionContext';
+import { Upload, Image as ImageIcon, Video, Trash2, Search } from 'lucide-react';
+import { uploadMedia, deleteMedia, getMediaDisplayUrl } from '../../services/mediaService';
+import { UpgradeModal } from '../UpgradeModal';
 
 interface Media {
   id: string;
@@ -14,15 +16,53 @@ interface Media {
   created_at: string;
 }
 
+function MediaPreview({ item }: { item: Media }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    if (item.file_type === 'image') {
+      getMediaDisplayUrl(item.file_url).then((u) => { if (!cancelled) setUrl(u); }).catch(() => { if (!cancelled) setError(true); });
+    } else {
+      getMediaDisplayUrl(item.file_url).then((u) => { if (!cancelled) setUrl(u); }).catch(() => { if (!cancelled) setError(true); });
+    }
+    return () => { cancelled = true; };
+  }, [item.id, item.file_url, item.file_type]);
+
+  if (error || !url) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-slate-100">
+        {item.file_type === 'image' ? <ImageIcon className="w-12 h-12 text-slate-300" /> : <Video className="w-12 h-12 text-slate-300" />}
+      </div>
+    );
+  }
+  if (item.file_type === 'image') {
+    return <img src={url} alt="" className="w-full h-full object-cover" onError={() => setError(true)} />;
+  }
+  return (
+    <video
+      src={url}
+      muted
+      preload="metadata"
+      playsInline
+      className="w-full h-full object-cover"
+      onError={() => setError(true)}
+    />
+  );
+}
+
 export function MediaLibrary() {
   const { user } = useAuth();
+  const { limits, usage, isAtLimit } = useSubscription();
   const [media, setMedia] = useState<Media[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'image' | 'video'>('all');
+  const [showUpgrade, setShowUpgrade] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const atMediaLimit = isAtLimit('mediaItems') || isAtLimit('storage');
 
   useEffect(() => {
     loadMedia();
@@ -59,7 +99,7 @@ export function MediaLibrary() {
         setUploadProgress(`Upload ${i + 1}/${files.length}: ${file.name}`);
 
         const result = await uploadMedia(file, user.id);
-        uploadedMedia.push(result);
+        uploadedMedia.push({ ...result, created_at: new Date().toISOString() });
       }
 
       setMedia([...uploadedMedia, ...media]);
@@ -73,7 +113,7 @@ export function MediaLibrary() {
     }
   };
 
-  const handleDelete = async (id: string, fileUrl: string) => {
+  const handleDelete = async (id: string) => {
     if (!confirm('Êtes-vous sûr de vouloir supprimer ce média ?')) return;
 
     try {
@@ -107,6 +147,12 @@ export function MediaLibrary() {
 
   return (
     <div className="space-y-6">
+      <UpgradeModal
+        open={showUpgrade}
+        onClose={() => setShowUpgrade(false)}
+        title="Media limit reached"
+        message="Upgrade your plan to add more media and storage."
+      />
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-3xl font-bold text-slate-900">Bibliothèque de médias</h1>
@@ -123,7 +169,9 @@ export function MediaLibrary() {
             <div>
               <h3 className="font-semibold text-slate-900">Upload de médias</h3>
               <p className="text-sm text-slate-600 mt-1">
-                {uploading ? uploadProgress : 'Images et vidéos acceptées'}
+                {uploading ? uploadProgress : atMediaLimit
+                  ? `Limit reached (${usage?.mediaLibraryCount ?? 0}/${limits.mediaLibraryItems} items). Upgrade to add more.`
+                  : 'Images et vidéos acceptées'}
               </p>
             </div>
           </div>
@@ -135,14 +183,14 @@ export function MediaLibrary() {
               multiple
               onChange={(e) => handleUpload(e.target.files)}
               className="hidden"
-              disabled={uploading}
+              disabled={uploading || atMediaLimit}
             />
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => atMediaLimit ? setShowUpgrade(true) : fileInputRef.current?.click()}
               disabled={uploading}
               className="px-6 py-3 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {uploading ? 'Upload en cours...' : 'Sélectionner des fichiers'}
+              {uploading ? 'Upload en cours...' : atMediaLimit ? 'Limit reached — Upgrade' : 'Sélectionner des fichiers'}
             </button>
           </div>
         </div>
@@ -210,14 +258,10 @@ export function MediaLibrary() {
               key={item.id}
               className="bg-white rounded-xl border border-slate-200 overflow-hidden hover:shadow-lg transition group"
             >
-              <div className="aspect-video bg-slate-100 flex items-center justify-center relative">
-                {item.file_type === 'image' ? (
-                  <ImageIcon className="w-12 h-12 text-slate-300" />
-                ) : (
-                  <Video className="w-12 h-12 text-slate-300" />
-                )}
+              <div className="aspect-video bg-slate-100 flex items-center justify-center relative overflow-hidden">
+                <MediaPreview item={item} />
                 <button
-                  onClick={() => handleDelete(item.id, item.file_url)}
+                  onClick={() => handleDelete(item.id)}
                   className="absolute top-2 right-2 p-2 bg-red-500 text-white rounded-lg opacity-0 group-hover:opacity-100 transition hover:bg-red-600"
                 >
                   <Trash2 className="w-4 h-4" />

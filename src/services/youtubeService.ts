@@ -45,7 +45,6 @@ export async function refreshYouTubeToken(accountId: string): Promise<string> {
 
   const clientId = import.meta.env.VITE_YOUTUBE_CLIENT_ID;
   const clientSecret = import.meta.env.VITE_YOUTUBE_CLIENT_SECRET;
-  const redirectUri = import.meta.env.VITE_YOUTUBE_REDIRECT_URI || `${window.location.origin}/auth/youtube/callback`;
 
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',

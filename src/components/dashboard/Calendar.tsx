@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDashboardNav } from '../../contexts/DashboardNavContext';
-import { ChevronLeft, ChevronRight, Clock, Edit, Trash2, Eye } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clock, Edit, Trash2 } from 'lucide-react';
 
 interface Post {
   id: string;
@@ -28,7 +28,6 @@ export function Calendar() {
   const [editScheduledTime, setEditScheduledTime] = useState('');
   const [saving, setSaving] = useState(false);
   const [draggingPostId, setDraggingPostId] = useState<string | null>(null);
-  const [dropTargetDay, setDropTargetDay] = useState<string | null>(null);
 
   useEffect(() => {
     loadScheduledPosts();
@@ -96,35 +95,6 @@ export function Calendar() {
     }
   };
 
-  const handleDropOnDay = async (postId: string, targetDate: Date) => {
-    if (!user) return;
-    const post = posts.find(p => p.id === postId);
-    if (!post) return;
-
-    const newScheduled = new Date(targetDate);
-    if (post.scheduled_for) {
-      const old = new Date(post.scheduled_for);
-      newScheduled.setHours(old.getHours(), old.getMinutes(), 0, 0);
-    } else {
-      newScheduled.setHours(9, 0, 0, 0);
-    }
-
-    try {
-      const { error } = await supabase
-        .from('posts')
-        .update({ scheduled_for: newScheduled.toISOString() })
-        .eq('id', postId)
-        .eq('user_id', user.id);
-      if (error) throw error;
-      await loadScheduledPosts();
-    } catch (error) {
-      console.error('Error rescheduling post:', error);
-      alert('Erreur lors du déplacement');
-    } finally {
-      setDraggingPostId(null);
-      setDropTargetDay(null);
-    }
-  };
 
   const loadScheduledPosts = async () => {
     if (!user) return;
@@ -304,7 +274,7 @@ export function Calendar() {
                 e.dataTransfer.effectAllowed = 'move';
                 setDraggingPostId(post.id);
               }}
-              onDragEnd={() => { setDraggingPostId(null); setDropTargetDay(null); }}
+              onDragEnd={() => { setDraggingPostId(null); }}
               className={`p-6 hover:bg-slate-50 transition ${draggingPostId === post.id ? 'opacity-50' : ''} cursor-grab active:cursor-grabbing`}
             >
               <div className="flex items-start justify-between gap-4">

@@ -1,4 +1,4 @@
-name: Process Scheduled Posts
+name: Process Due Email Campaigns
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  process-posts:
+  process-due-email-campaigns:
     runs-on: ubuntu-latest
     steps:
       - name: Check Secrets
@@ -25,17 +25,7 @@ jobs:
           fi
           echo "Secrets configured successfully"
 
-      - name: Debug secret length (remove after fix)
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          RAW_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: |
-          TRIMMED_LEN=$(echo -n "$RAW_KEY" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | wc -c)
-          echo "SUPABASE_URL starts with: ${SUPABASE_URL:0:50}..."
-          echo "SERVICE_ROLE_KEY length (after trim): $TRIMMED_LEN"
-          echo "→ In Supabase Dashboard → API → service_role key, copy it and check length (e.g. in a local file: wc -c). It must match the number above."
-
-      - name: Call Post Queue Processor
+      - name: Call Email Campaign Dispatch (cron mode)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -43,28 +33,26 @@ jobs:
         run: |
           # Trim whitespace/newlines (GitHub can store trailing newline when pasting)
           SUPABASE_URL_TRIM=$(echo -n "$SUPABASE_URL" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          # If SUPABASE_URL was accidentally saved with a /rest/v1 suffix, edge-functions will 404.
-          SUPABASE_URL_TRIM=${SUPABASE_URL_TRIM%/rest/v1}
-          SUPABASE_URL_TRIM=${SUPABASE_URL_TRIM%/}
           SERVICE_KEY=$(echo -n "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
           ANON_KEY=$(echo -n "$SUPABASE_ANON_KEY" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          
+
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            "${SUPABASE_URL_TRIM}/functions/v1/post-queue-processor" \
+            "${SUPABASE_URL_TRIM}/functions/v1/email-campaign-dispatch" \
             -H "Authorization: Bearer ${SERVICE_KEY}" \
             -H "apikey: ${ANON_KEY}" \
-            -H "Content-Type: application/json")
-          
+            -H "Content-Type: application/json" \
+            --data '{"mode":"due","global":true}')
+
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | sed '$d')
-          
+
           echo "Response Code: $HTTP_CODE"
           echo "Response Body: $BODY"
-          
+
           if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "✅ Post queue processed successfully"
+            echo "✅ Due email campaigns processed successfully"
           else
-            echo "❌ Error processing post queue"
+            echo "❌ Error processing due email campaigns"
             exit 1
           fi
 

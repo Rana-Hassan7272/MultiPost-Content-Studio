@@ -5,13 +5,15 @@ export type DashboardView =
   | 'calendar'
   | 'media'
   | 'compose'
+  | 'email'
   | 'accounts'
   | 'analytics'
   | 'voice-profile'
   | 'smart-scheduling'
   | 'audience'
   | 'performance'
-  | 'predictions';
+  | 'predictions'
+  | 'pricing';
 
 type DashboardNavFn = (view: DashboardView) => void;
 

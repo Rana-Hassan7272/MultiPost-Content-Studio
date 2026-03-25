@@ -1,8 +1,10 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSubscription } from '../../contexts/SubscriptionContext';
 import { useDashboardNav } from '../../contexts/DashboardNavContext';
 import { TrendingUp, Eye, Heart, Share2, MessageCircle, Youtube, Instagram, Video, RefreshCw, Download, Calendar } from 'lucide-react';
+import { UpgradeModal } from '../UpgradeModal';
 
 interface PlatformStats {
   platform: string;
@@ -25,7 +27,10 @@ function getDefaultDateRange(): { from: string; to: string } {
 
 export function Analytics() {
   const { user } = useAuth();
+  const { canUseFeature } = useSubscription();
   const navigate = useDashboardNav();
+  const [showUpgrade, setShowUpgrade] = useState(false);
+  const canExportCsv = canUseFeature('analyticsExportCsv');
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [platformStats, setPlatformStats] = useState<PlatformStats[]>([]);
@@ -194,6 +199,12 @@ export function Analytics() {
 
   return (
     <div className="space-y-6">
+      <UpgradeModal
+        open={showUpgrade}
+        onClose={() => setShowUpgrade(false)}
+        title="Export CSV"
+        message="CSV export is available on the Pro plan."
+      />
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-slate-900">Analytics</h1>
@@ -221,9 +232,10 @@ export function Analytics() {
           </div>
           <button
             type="button"
-            onClick={exportCSV}
+            onClick={() => canExportCsv ? exportCSV() : setShowUpgrade(true)}
             disabled={rawPlatformPosts.length === 0}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            title={!canExportCsv ? 'Upgrade to Pro to export CSV' : undefined}
           >
             <Download className="w-4 h-4" />
             Export CSV

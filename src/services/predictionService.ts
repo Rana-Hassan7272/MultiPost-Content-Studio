@@ -89,7 +89,7 @@ export async function predictPerformance(
   const factors: PredictionFactor[] = [];
   const tips: string[] = [];
 
-  const titleScore = analyzeTitleQuality(title, platform, benchmark);
+  const titleScore = analyzeTitleQuality(title, benchmark);
   factors.push(titleScore.factor);
   if (titleScore.tip) tips.push(titleScore.tip);
 
@@ -97,11 +97,14 @@ export async function predictPerformance(
   factors.push(descScore.factor);
   if (descScore.tip) tips.push(descScore.tip);
 
-  const hashtagScore = analyzeHashtags(hashtags, platform, benchmark);
+  const hashtagScore = analyzeHashtags(hashtags, benchmark);
   factors.push(hashtagScore.factor);
   if (hashtagScore.tip) tips.push(hashtagScore.tip);
 
-  let timingScore = { factor: { name: 'Timing', score: 50, maxScore: 100, impact: 'neutral' as const }, tip: '' };
+  let timingScore: { factor: PredictionFactor; tip: string } = {
+    factor: { name: 'Timing', score: 50, maxScore: 100, impact: 'neutral' },
+    tip: '',
+  };
   if (scheduledDay !== undefined && scheduledHour !== undefined) {
     timingScore = await analyzeTimingScore(session.user.id, platform, scheduledDay, scheduledHour, posts);
     factors.push(timingScore.factor);
@@ -117,7 +120,7 @@ export async function predictPerformance(
     if (thumbnailScore.tip) tips.push(thumbnailScore.tip);
   }
 
-  if (videoDuration) {
+  if (typeof videoDuration === 'number' && videoDuration > 0 && !Number.isNaN(videoDuration)) {
     const durationScore = analyzeVideoDuration(videoDuration, platform);
     factors.push(durationScore.factor);
     if (durationScore.tip) tips.push(durationScore.tip);
@@ -131,9 +134,9 @@ export async function predictPerformance(
   factors.push(consistencyScore.factor);
   if (consistencyScore.tip) tips.push(consistencyScore.tip);
 
-  const totalScore = factors.reduce((sum, f) => sum + f.score, 0);
-  const maxScore = factors.reduce((sum, f) => sum + f.maxScore, 0);
-  const overallScore = Math.round((totalScore / maxScore) * 100);
+  const totalScore = factors.reduce((sum, f) => sum + (Number.isFinite(f.score) ? f.score : 0), 0);
+  const maxScore = factors.reduce((sum, f) => sum + (f.maxScore || 100), 0);
+  const overallScore = Math.min(100, Math.max(0, Math.round((maxScore > 0 ? totalScore / maxScore : 0.5) * 100)));
 
   let baseViews = benchmark.avgViews;
   let baseEngagement = benchmark.avgEngagement;
@@ -190,7 +193,7 @@ export async function predictPerformance(
   };
 }
 
-function analyzeTitleQuality(title: string, platform: string, benchmark: any): { factor: PredictionFactor; tip: string } {
+function analyzeTitleQuality(title: string, benchmark: any): { factor: PredictionFactor; tip: string } {
   const length = title.length;
   const { min, max } = benchmark.optimalTitleLength;
   
@@ -217,7 +220,6 @@ function analyzeTitleQuality(title: string, platform: string, benchmark: any): {
 
   const hasEmoji = /[\u{1F600}-\u{1F6FF}]/u.test(title);
   const hasNumbers = /\d/.test(title);
-  const hasUppercase = /[A-Z]/.test(title);
   const hasPowerWords = /(new|official|exclusive|viral|trending|must|watch|now|best|top|amazing|incredible)/i.test(title);
 
   if (hasEmoji) score = Math.min(100, score + 5);
@@ -272,7 +274,7 @@ function analyzeDescriptionQuality(description: string, platform: string, benchm
   };
 }
 
-function analyzeHashtags(hashtags: string[], platform: string, benchmark: any): { factor: PredictionFactor; tip: string } {
+function analyzeHashtags(hashtags: string[], benchmark: any): { factor: PredictionFactor; tip: string } {
   const count = hashtags.filter(h => h.trim()).length;
   const { min, max } = benchmark.optimalHashtags;
   
@@ -304,7 +306,7 @@ function analyzeHashtags(hashtags: string[], platform: string, benchmark: any): 
 }
 
 async function analyzeTimingScore(
-  userId: string,
+  _userId: string,
   platform: string,
   day: number,
   hour: number,
@@ -394,8 +396,6 @@ function analyzeHistoricalPerformance(posts: any[]): { factor: PredictionFactor 
   }
 
   const avgViews = posts.reduce((sum, p) => sum + (p.views || 0), 0) / posts.length;
-  const maxViews = Math.max(...posts.map(p => p.views || 0));
-  
   let score = 50;
   let impact: 'positive' | 'neutral' | 'negative' = 'neutral';
 
@@ -487,6 +487,13 @@ function analyzeVideoDuration(durationSeconds: number, platform: string): { fact
   let impact: 'positive' | 'neutral' | 'negative' = 'neutral';
   let tip = '';
 
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return {
+      factor: { name: 'Video Duration', score: 50, maxScore: 100, impact: 'neutral' },
+      tip: ''
+    };
+  }
+
   const optimalDurations: Record<string, { min: number; max: number; ideal: number }> = {
     youtube: { min: 480, max: 900, ideal: 600 },
     instagram: { min: 15, max: 90, ideal: 30 },
@@ -494,28 +501,33 @@ function analyzeVideoDuration(durationSeconds: number, platform: string): { fact
   };
 
   const optimal = optimalDurations[platform] || optimalDurations.youtube;
-  const durationMinutes = Math.round(durationSeconds / 60);
+  const minutes = Math.floor(durationSeconds / 60);
+  const seconds = Math.round(durationSeconds % 60);
+  const durationLabel = seconds > 0 ? `${minutes} min ${seconds} sec` : `${minutes} min`;
 
   if (durationSeconds >= optimal.min && durationSeconds <= optimal.max) {
     const distanceFromIdeal = Math.abs(durationSeconds - optimal.ideal);
     const maxDistance = Math.max(optimal.ideal - optimal.min, optimal.max - optimal.ideal);
     score = Math.round(100 - (distanceFromIdeal / maxDistance) * 20);
+    score = Math.min(100, Math.max(0, score));
     impact = 'positive';
   } else if (durationSeconds < optimal.min) {
     score = Math.round((durationSeconds / optimal.min) * 60);
+    score = Math.min(99, Math.max(1, score));
     impact = 'negative';
     if (platform === 'youtube') {
-      tip = `Video is ${durationMinutes} min. YouTube favors 8-15 min videos for better watch time.`;
+      tip = `Video is ${durationLabel}. YouTube often favors 8-15 min videos for better watch time.`;
     } else {
-      tip = `Video might be too short for optimal ${platform} performance.`;
+      tip = `Video is ${durationLabel}. Consider longer content for optimal ${platform} performance.`;
     }
   } else {
     score = Math.round(Math.max(40, 80 - ((durationSeconds - optimal.max) / optimal.max) * 40));
+    score = Math.min(100, Math.max(0, score));
     impact = 'neutral';
     if (platform === 'youtube') {
-      tip = `Video is ${durationMinutes} min. Consider if audience will watch full length.`;
+      tip = `Video is ${durationLabel}. Consider if your audience will watch the full length.`;
     } else {
-      tip = `Video is long for ${platform}. Shorter content often performs better.`;
+      tip = `Video is ${durationLabel}. Shorter clips often perform better on ${platform}.`;
     }
   }
 
@@ -565,7 +577,7 @@ function analyzeTitleEmotion(title: string): { factor: PredictionFactor; tip: st
   };
 }
 
-async function analyzePostingConsistency(userId: string, platform: string, posts: any[]): Promise<{ factor: PredictionFactor; tip: string }> {
+async function analyzePostingConsistency(_userId: string, _platform: string, posts: any[]): Promise<{ factor: PredictionFactor; tip: string }> {
   let score = 50;
   let impact: 'positive' | 'neutral' | 'negative' = 'neutral';
   let tip = '';

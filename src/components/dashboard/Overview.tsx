@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDashboardNav } from '../../contexts/DashboardNavContext';
-import { TrendingUp, Users, Eye, Heart, Calendar, FileText, Clock, ArrowRight, BarChart3, Link2, FilePlus } from 'lucide-react';
+import { TrendingUp, Users, Eye, Heart, Calendar, FileText, Clock, BarChart3, Link2, FilePlus } from 'lucide-react';
 import { getRecommendedPostingTime, getAudienceInsights } from '../../services/analyticsService';
 
 export function Overview() {
@@ -30,44 +30,52 @@ export function Overview() {
 
     try {
       const [postsResult, accountsResult, platformPostsResult] = await Promise.all([
-        supabase.from('posts').select('*').eq('user_id', user.id),
-        supabase.from('connected_accounts').select('*').eq('user_id', user.id).eq('is_active', true),
-        supabase.from('posts').select(`
-          *,
-          platform_posts (
-            views,
-            likes,
-            status
-          )
-        `).eq('user_id', user.id).order('created_at', { ascending: false }).limit(5)
+        supabase.from('posts').select('id, status').eq('user_id', user.id),
+        supabase.from('connected_accounts').select('id').eq('user_id', user.id).eq('is_active', true),
+        supabase.from('platform_posts').select(`
+          views,
+          likes,
+          comments,
+          status,
+          platform_post_id,
+          posts!inner ( user_id )
+        `).eq('posts.user_id', user.id).eq('status', 'published').not('platform_post_id', 'is', null)
       ]);
 
       const posts = postsResult.data || [];
       const accounts = accountsResult.data || [];
+      const platformPosts = platformPostsResult.data || [];
 
-      let totalViews = 0;
-      let totalLikes = 0;
-
-      posts.forEach((post: any) => {
-        post.platform_posts?.forEach((pp: any) => {
-          if (pp.status === 'published' && pp.platform_post_id) {
-            totalViews += pp.views || 0;
-            totalLikes += pp.likes || 0;
-          }
-        });
-      });
+      const totalViews = platformPosts.reduce((sum: number, pp: any) => sum + (Number(pp.views) || 0), 0);
+      const totalLikes = platformPosts.reduce((sum: number, pp: any) => sum + (Number(pp.likes) || 0), 0);
 
       setStats({
         totalPosts: posts.length,
-        scheduledPosts: posts.filter(p => p.status === 'scheduled').length,
-        publishedPosts: posts.filter(p => p.status === 'published').length,
+        scheduledPosts: posts.filter((p: any) => p.status === 'scheduled').length,
+        publishedPosts: posts.filter((p: any) => p.status === 'published').length,
         totalViews,
         totalLikes,
         connectedAccounts: accounts.length,
       });
 
+      const recentPostsQuery = await supabase
+        .from('posts')
+        .select(`
+          id,
+          title,
+          description,
+          status,
+          platforms,
+          created_at,
+          platform_posts ( views, likes, status, platform_post_id )
+        `)
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      const recentPostsList = recentPostsQuery.data || [];
       setRecentPosts(
-        (platformPostsResult.data || []).filter((post: any) =>
+        recentPostsList.filter((post: any) =>
           post.platform_posts?.some((pp: any) => pp.status === 'published' && pp.platform_post_id)
         )
       );
@@ -90,12 +98,12 @@ export function Overview() {
   };
 
   const statCards = [
-    { label: 'Publications totales', value: stats.totalPosts, icon: FileText, color: 'blue' },
-    { label: 'Planifiées', value: stats.scheduledPosts, icon: Calendar, color: 'orange' },
-    { label: 'Vues totales', value: stats.totalViews.toLocaleString(), icon: Eye, color: 'green' },
-    { label: 'Likes totaux', value: stats.totalLikes.toLocaleString(), icon: Heart, color: 'pink' },
-    { label: 'Comptes connectés', value: stats.connectedAccounts, icon: Users, color: 'cyan' },
-    { label: 'Publiées', value: stats.publishedPosts, icon: TrendingUp, color: 'emerald' },
+    { label: 'Total publications', value: stats.totalPosts, icon: FileText, color: 'blue' },
+    { label: 'Planned', value: stats.scheduledPosts, icon: Calendar, color: 'orange' },
+    { label: 'Total views', value: stats.totalViews.toLocaleString(), icon: Eye, color: 'green' },
+    { label: 'Total likes', value: stats.totalLikes.toLocaleString(), icon: Heart, color: 'pink' },
+    { label: 'Connected accounts', value: stats.connectedAccounts, icon: Users, color: 'cyan' },
+    { label: 'Published', value: stats.publishedPosts, icon: TrendingUp, color: 'emerald' },
   ];
 
   const colorClasses: Record<string, string> = {
@@ -118,8 +126,8 @@ export function Overview() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-slate-900">Tableau de bord</h1>
-        <p className="text-slate-600 mt-2">Vue d'ensemble de votre activité</p>
+        <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
+        <p className="text-slate-600 mt-2">Overview of your business</p>
       </div>
 
       {stats.connectedAccounts === 0 ? (
@@ -127,16 +135,16 @@ export function Overview() {
           <div className="inline-flex p-4 rounded-full bg-blue-100 text-blue-600 mb-4">
             <Link2 className="w-12 h-12" />
           </div>
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">Connectez votre premier compte</h2>
+          <h2 className="text-2xl font-bold text-slate-900 mb-2">Connect your first account</h2>
           <p className="text-slate-600 mb-6 max-w-md mx-auto">
-            Liez votre compte YouTube ou Instagram pour publier et suivre vos statistiques en un seul endroit.
+            Link your YouTube or Instagram account to publish and track your stats in one place.
           </p>
           <button
             onClick={() => navigate('accounts')}
             className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 transition"
           >
             <Link2 className="w-5 h-5" />
-            Comptes liés
+            Linked accounts
           </button>
         </div>
       ) : stats.totalPosts === 0 ? (
@@ -144,16 +152,16 @@ export function Overview() {
           <div className="inline-flex p-4 rounded-full bg-emerald-100 text-emerald-600 mb-4">
             <FilePlus className="w-12 h-12" />
           </div>
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">Créez votre première publication</h2>
+          <h2 className="text-2xl font-bold text-slate-900 mb-2">Create your first post</h2>
           <p className="text-slate-600 mb-6 max-w-md mx-auto">
-            Rédigez un post et publiez-le sur YouTube ou Instagram, ou planifiez-le pour plus tard.
+            Write a post and publish to YouTube or Instagram, or schedule it for later.
           </p>
           <button
             onClick={() => navigate('compose')}
             className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-600 text-white font-medium rounded-xl hover:bg-emerald-700 transition"
           >
             <FilePlus className="w-5 h-5" />
-            Créer une publication
+            Create post
           </button>
         </div>
       ) : null}
@@ -222,18 +230,18 @@ export function Overview() {
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="p-6 border-b border-slate-200">
-          <h2 className="text-xl font-bold text-slate-900">Publications récentes</h2>
+          <h2 className="text-xl font-bold text-slate-900">Recent posts</h2>
         </div>
         <div className="divide-y divide-slate-200">
           {recentPosts.length === 0 ? (
             <div className="p-12 text-center">
-              <p className="text-slate-500 mb-4">Aucune publication pour le moment.</p>
+              <p className="text-slate-500 mb-4">No posts yet.</p>
               <button
                 onClick={() => navigate('compose')}
                 className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition"
               >
                 <FilePlus className="w-4 h-4" />
-                Créer une publication
+                Create post
               </button>
             </div>
           ) : (
@@ -249,11 +257,11 @@ export function Overview() {
                         post.status === 'scheduled' ? 'bg-blue-100 text-blue-800' :
                         'bg-slate-100 text-slate-800'
                       }`}>
-                        {post.status === 'published' ? 'Publiée' :
-                         post.status === 'scheduled' ? 'Planifiée' : 'Brouillon'}
+                        {post.status === 'published' ? 'Published' :
+                         post.status === 'scheduled' ? 'Planned' : 'Draft'}
                       </span>
                       <span className="text-xs text-slate-500">
-                        {new Date(post.created_at).toLocaleDateString('fr-FR')}
+                        {new Date(post.created_at).toLocaleDateString()}
                       </span>
                     </div>
                   </div>

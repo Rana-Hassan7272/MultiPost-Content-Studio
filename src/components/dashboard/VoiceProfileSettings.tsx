@@ -1,16 +1,20 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSubscription } from '../../contexts/SubscriptionContext';
 import { getVoiceProfiles, createVoiceProfile, updateVoiceProfile, type VoiceProfile } from '../../services/voiceProfileService';
-import { Save, Plus, Trash2, Sparkles } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { Save, Plus } from 'lucide-react';
+import { UpgradeModal } from '../UpgradeModal';
 
 export function VoiceProfileSettings() {
   const { user } = useAuth();
+  const { isAtLimit } = useSubscription();
   const [profiles, setProfiles] = useState<VoiceProfile[]>([]);
   const [selectedProfile, setSelectedProfile] = useState<VoiceProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [showUpgrade, setShowUpgrade] = useState(false);
+  const atVoiceLimit = isAtLimit('voiceProfiles');
 
   const [formData, setFormData] = useState({
     name: '',
@@ -22,6 +26,8 @@ export function VoiceProfileSettings() {
     use_trending_hashtags: true,
     include_artist_name: true,
     brand_guidelines: {} as Record<string, any>,
+    content_focus: '',
+    preferred_genres: [] as string[],
   });
 
   const toneOptions = ['energetic', 'professional', 'casual', 'minimal', 'humorous', 'serious'];
@@ -56,6 +62,8 @@ export function VoiceProfileSettings() {
       use_trending_hashtags: profile.use_trending_hashtags,
       include_artist_name: profile.include_artist_name,
       brand_guidelines: profile.brand_guidelines || {},
+      content_focus: profile.content_focus || '',
+      preferred_genres: profile.preferred_genres || [],
     });
   };
 
@@ -73,6 +81,12 @@ export function VoiceProfileSettings() {
         await updateVoiceProfile(selectedProfile.id, formData);
         setMessage({ type: 'success', text: 'Profil mis à jour avec succès' });
       } else {
+        if (atVoiceLimit) {
+          setMessage({ type: 'error', text: 'Voice profile limit reached. Upgrade to add more.' });
+          setShowUpgrade(true);
+          setLoading(false);
+          return;
+        }
         const newProfile = await createVoiceProfile(formData);
         setProfiles([...profiles, newProfile]);
         setSelectedProfile(newProfile);
@@ -100,6 +114,8 @@ export function VoiceProfileSettings() {
       use_trending_hashtags: true,
       include_artist_name: true,
       brand_guidelines: {},
+      content_focus: '',
+      preferred_genres: [],
     });
   };
 
@@ -113,6 +129,12 @@ export function VoiceProfileSettings() {
 
   return (
     <div className="space-y-6">
+      <UpgradeModal
+        open={showUpgrade}
+        onClose={() => setShowUpgrade(false)}
+        title="Voice profile limit reached"
+        message="Upgrade your plan to create more voice profiles."
+      />
       <div>
         <h1 className="text-3xl font-bold text-slate-900">Profil de voix</h1>
         <p className="text-slate-600 mt-2">Configurez comment l'AI génère du contenu pour votre marque</p>
@@ -124,9 +146,10 @@ export function VoiceProfileSettings() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-slate-900">Profils</h2>
               <button
-                onClick={handleNewProfile}
-                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"
-                title="Nouveau profil"
+                onClick={() => atVoiceLimit ? setShowUpgrade(true) : handleNewProfile()}
+                disabled={atVoiceLimit}
+                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                title={atVoiceLimit ? 'Limit reached — Upgrade to add more' : 'Nouveau profil'}
               >
                 <Plus className="w-5 h-5" />
               </button>
@@ -177,8 +200,45 @@ export function VoiceProfileSettings() {
             </div>
 
             <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Content focus (optional)
+              </label>
+              <input
+                type="text"
+                value={formData.content_focus}
+                onChange={(e) => setFormData({ ...formData, content_focus: e.target.value })}
+                className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+                placeholder="e.g. music videos, songs, live performances, beats"
+              />
+              <p className="text-xs text-slate-500 mt-1">Helps AI generate content that matches what you usually post.</p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Preferred genres (optional)
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {['HipHop', 'Pop', 'R&B', 'Rock', 'Electronic', 'Rap', 'Soul', 'Indie', 'Jazz', 'Country'].map((genre) => (
+                  <button
+                    key={genre}
+                    type="button"
+                    onClick={() => toggleArrayItem(formData.preferred_genres, genre, (arr) => setFormData({ ...formData, preferred_genres: arr }))}
+                    className={`px-3 py-1.5 rounded-lg border-2 text-sm transition ${
+                      formData.preferred_genres.includes(genre)
+                        ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium'
+                        : 'border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    {genre}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-slate-500 mt-1">AI will favor these genres when suggesting titles and hashtags.</p>
+            </div>
+
+            <div>
               <label className="block text-sm font-medium text-slate-700 mb-3">
-                Style de ton
+                Tone style
               </label>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {toneOptions.map((tone) => (

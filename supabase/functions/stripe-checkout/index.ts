@@ -35,14 +35,44 @@ Deno.serve(async (req: Request) => {
     }
 
     const { planType } = await req.json();
-    if (!planType || !PRICE_IDS[planType as keyof typeof PRICE_IDS]) {
+    if (!planType || !["starter", "pro"].includes(planType)) {
       throw new Error("Invalid plan type");
+    }
+
+    const paymentMode = (Deno.env.get("PAYMENT_MODE") || "stripe_test").toLowerCase();
+    if (paymentMode === "fake") {
+      const now = new Date();
+      const periodEnd = new Date(now);
+      periodEnd.setMonth(periodEnd.getMonth() + 1);
+      const { error: upsertError } = await supabase
+        .from("subscriptions")
+        .upsert(
+          {
+            user_id: user.id,
+            plan_type: planType,
+            status: "active",
+            current_period_start: now.toISOString(),
+            current_period_end: periodEnd.toISOString(),
+            cancel_at_period_end: false,
+            stripe_customer_id: null,
+            stripe_subscription_id: null,
+            updated_at: now.toISOString(),
+          },
+          { onConflict: "user_id" }
+        );
+      if (upsertError) throw new Error(upsertError.message);
+      const origin = req.headers.get("origin") || req.headers.get("referer")?.replace(/\/$/, "") || "";
+      const successUrl = origin ? `${origin}/dashboard?subscription=activated&plan=${planType}` : "/dashboard";
+      return new Response(
+        JSON.stringify({ sessionId: null, url: successUrl }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     const stripeKey = Deno.env.get("STRIPE_SECRET_KEY");
     if (!stripeKey) {
       return new Response(
-        JSON.stringify({ error: "Stripe not configured. Please configure your Stripe secret key." }),
+        JSON.stringify({ error: "Stripe not configured. Set STRIPE_SECRET_KEY for stripe_test or stripe_live." }),
         {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -82,7 +112,7 @@ Deno.serve(async (req: Request) => {
       payment_method_types: ["card"],
       line_items: [
         {
-          price: PRICE_IDS[planType as keyof typeof PRICE_IDS],
+          price: Deno.env.get(`STRIPE_PRICE_${planType.toUpperCase()}`) || PRICE_IDS[planType as keyof typeof PRICE_IDS],
           quantity: 1,
         },
       ],

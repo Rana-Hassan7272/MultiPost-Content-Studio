@@ -12,6 +12,8 @@ export interface VoiceProfile {
   use_trending_hashtags: boolean;
   include_artist_name: boolean;
   brand_guidelines: Record<string, any>;
+  content_focus?: string | null;
+  preferred_genres?: string[] | null;
   created_at: string;
   updated_at: string;
 }

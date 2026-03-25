@@ -17,7 +17,7 @@ export async function uploadMedia(
   const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
   const filePath = `${userId}/${fileName}`;
 
-  const { data: uploadData, error: uploadError } = await supabase.storage
+  const { error: uploadError } = await supabase.storage
     .from('media')
     .upload(filePath, file, {
       cacheControl: '3600',
@@ -53,6 +53,19 @@ export async function uploadMedia(
   }
 
   return mediaData;
+}
+
+/** Get URL suitable for display (signed if path-like, else returns as-is). */
+export async function getMediaDisplayUrl(fileUrl: string): Promise<string> {
+  if (!fileUrl) return '';
+  if (fileUrl.startsWith('data:')) return fileUrl;
+  const match = fileUrl.match(/\/storage\/v1\/object\/[^/]+\/media\/(.+)$/) || fileUrl.match(/\/media\/(.+)$/);
+  const path = match ? match[1] : null;
+  if (path) {
+    const { data } = await supabase.storage.from('media').createSignedUrl(path, 3600);
+    if (data?.signedUrl) return data.signedUrl;
+  }
+  return fileUrl;
 }
 
 export async function deleteMedia(mediaId: string, userId: string): Promise<void> {

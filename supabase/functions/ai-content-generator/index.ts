@@ -73,6 +73,19 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    const planLimits: Record<string, number> = { free: 20, starter: 200, pro: 1000 };
+    const { data: sub } = await supabase.from("subscriptions").select("plan_type, current_period_end").eq("user_id", user.id).eq("status", "active").maybeSingle();
+    const planType = sub && (!sub.current_period_end || new Date(sub.current_period_end) >= new Date()) ? sub.plan_type : "free";
+    const aiLimit = planLimits[planType] ?? 20;
+    const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
+    const { count } = await supabase.from("ai_content_suggestions").select("id", { count: "exact", head: true }).eq("user_id", user.id).gte("created_at", startOfMonth);
+    if ((count ?? 0) >= aiLimit) {
+      return new Response(
+        JSON.stringify({ error: `AI limit reached (${aiLimit} per month). Upgrade your plan for more.` }),
+        { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     let videoAnalysis = null;
     let videoAnalysisDetails: any = null;
     if (videoThumbnail) {
@@ -101,6 +114,19 @@ Deno.serve(async (req: Request) => {
     }
 
     const prompt = buildPrompt(platform, contentType, videoTitle, videoDescription, keywords, voiceProfile, videoAnalysis, videoFileName, fileNameAnalysis, videoAnalysisDetails);
+
+    let musicDetailsForReplace: { artist?: string; songTitle?: string; genre?: string } = {};
+    if (fileNameAnalysis) {
+      try {
+        const parsed = typeof fileNameAnalysis === 'string' ? JSON.parse(fileNameAnalysis) : fileNameAnalysis;
+        if (parsed.details) musicDetailsForReplace = { ...musicDetailsForReplace, ...parsed.details };
+      } catch (_) {}
+    }
+    if (videoAnalysisDetails?.details) {
+      if (videoAnalysisDetails.details.artist) musicDetailsForReplace.artist = videoAnalysisDetails.details.artist;
+      if (videoAnalysisDetails.details.genre) musicDetailsForReplace.genre = videoAnalysisDetails.details.genre;
+      if (videoAnalysisDetails.details.songTitle) musicDetailsForReplace.songTitle = videoAnalysisDetails.details.songTitle;
+    }
 
     const cacheKey = `${userId}_${platform}_${contentType}_${videoFileName || 'no_file'}_${videoTitle || 'no_title'}_${voiceProfileId || 'no_profile'}`;
     
@@ -205,9 +231,9 @@ Deno.serve(async (req: Request) => {
     if (generatedText.includes('[Artist Name]') || generatedText.includes('[Song Title]') || generatedText.includes('[Genre]')) {
       console.warn('AI generated placeholders - filtering them out');
       generatedText = generatedText
-        .replace(/\[Artist Name\]/g, musicDetails?.artist || '')
-        .replace(/\[Song Title\]/g, musicDetails?.songTitle || '')
-        .replace(/\[Genre\]/g, musicDetails?.genre || '')
+        .replace(/\[Artist Name\]/g, musicDetailsForReplace?.artist || '')
+        .replace(/\[Song Title\]/g, musicDetailsForReplace?.songTitle || '')
+        .replace(/\[Genre\]/g, musicDetailsForReplace?.genre || '')
         .replace(/\[.*?\]/g, '');
     }
 
@@ -246,7 +272,26 @@ Deno.serve(async (req: Request) => {
   }
 });
 
+function isUninformativeFileName(fileName: string): boolean {
+  if (!fileName || fileName.length < 3) return true;
+  const base = fileName.replace(/\.[^.]+$/, '').trim();
+  if (base.length < 2) return true;
+  const lower = base.toLowerCase();
+  if (/^\d{4}[-\s_]?\d{2}[-\s_]?\d{2}([-\s_]?\d{2}[-\s_]?\d{2}([-\s_]?\d{2})?)?$/.test(base)) return true;
+  if (/^\d{2}[-\s_]?\d{2}[-\s_]?\d{2}([-\s_]?\d{2}[-\s_]?\d{2})?$/.test(base)) return true;
+  if (/^img[_\-]?\d+$/i.test(base)) return true;
+  if (/^vid[eo]?[_\-]?\d+$/i.test(base)) return true;
+  if (/^recording[_\-]?\d*$/i.test(base)) return true;
+  if (/^screen[_\-]?recording$/i.test(base)) return true;
+  if (/^\d+$/.test(base)) return true;
+  if (lower === 'video' || lower === 'movie' || lower === 'clip' || lower === 'untitled') return true;
+  return false;
+}
+
 async function analyzeFileName(fileName: string, apiKey: string): Promise<string | null> {
+  if (isUninformativeFileName(fileName)) {
+    return null;
+  }
   try {
     const modelName = "gemini-2.5-flash-lite";
     const apiVersion = "v1beta";
@@ -414,7 +459,7 @@ async function analyzeVideoThumbnail(thumbnailBase64: string, apiKey: string): P
     const modelName = "gemini-2.5-flash-lite";
     const apiVersion = "v1beta";
     
-    const prompt = `Analyze this video frame/thumbnail with EXTREME DETAIL and ACCURACY. This is for a MUSIC app, but be accurate - don't assume it's music unless you see music-related content.
+    const prompt = `Analyze this image with EXTREME DETAIL and ACCURACY. It may be a VIDEO FRAME/THUMBNAIL or a STANDALONE PHOTO (e.g. Instagram post, artwork). This is for a MUSIC app, but be accurate - don't assume it's music unless you see music-related content.
 
 Analyze and identify:
 
@@ -455,7 +500,7 @@ Analyze and identify:
 
 Return a detailed JSON object:
 {
-  "contentType": "music-video" | "film-short" | "coding-tech" | "other",
+  "contentType": "music-video" | "film-short" | "coding-tech" | "photo-image" | "other",
   "details": {
     "artist": "artist name if visible",
     "genre": "music genre if music",
@@ -531,7 +576,8 @@ function buildPrompt(
   videoAnalysis: string | null = null,
   videoFileName?: string,
   fileNameAnalysis: string | null = null,
-  videoAnalysisDetails: any = null
+  videoAnalysisDetails: any = null,
+  filenameUninformative: boolean = false
 ): string {
   const platformRules = {
     youtube: "YouTube: Focus on SEO, include keywords, 60-100 characters for titles, detailed descriptions up to 5000 chars. Use comma-separated tags.",
@@ -552,6 +598,7 @@ Content Preferences:
 - Avoid Cringe Hashtags: ${voiceProfile.avoid_cringe_hashtags ? 'YES - Avoid overused hashtags like #FYP, #Viral, #Trending (unless specifically requested)' : 'NO - Use any trending hashtags'}
 - Use Trending Hashtags: ${voiceProfile.use_trending_hashtags ? 'YES - Include current trending hashtags relevant to the content' : 'NO - Focus on niche, specific hashtags'}
 - Include Artist Name: ${voiceProfile.include_artist_name ? 'YES - Include artist name when available' : 'NO - Focus on song/content, not artist name'}
+${voiceProfile.content_focus ? `- Content Focus: "${voiceProfile.content_focus}" - User mainly posts this type of content. Keep suggestions aligned with this focus.\n` : ''}${(voiceProfile.preferred_genres && Array.isArray(voiceProfile.preferred_genres) && voiceProfile.preferred_genres.length > 0) ? `- Preferred Genres: ${voiceProfile.preferred_genres.join(', ')} - Favor these genres in titles, descriptions, and hashtags.\n` : ''}
 
 CRITICAL: All generated content MUST match these voice profile settings. The tone, emoji usage, language style, and hashtag preferences MUST be reflected in every suggestion.
 ` : '';
@@ -640,7 +687,12 @@ ${platformRules[platform as keyof typeof platformRules]}`
       contentContext += `FILENAME: "${videoFileName}"\n\n`;
     }
   } else if (videoFileName) {
-    contentContext += `FILENAME: "${videoFileName}"\n\n`;
+    if (filenameUninformative) {
+      contentContext += `⚠️ FILENAME IS NOT DESCRIPTIVE: "${videoFileName}" looks like a date/timestamp or generic name.\n`;
+      contentContext += `IGNORE the filename for content ideas. Base your titles and descriptions ONLY on the VIDEO FRAME ANALYSIS (the image) below—describe what you actually see in the video.\n\n`;
+    } else {
+      contentContext += `FILENAME: "${videoFileName}"\n\n`;
+    }
   }
   
   if (videoAnalysisDetails) {
@@ -693,6 +745,18 @@ ${platformRules[platform as keyof typeof platformRules]}`
       if (details.description) contentContext += `What's Visible: ${details.description}\n`;
       if (videoAnalysisDetails.analysis) contentContext += `Analysis: ${videoAnalysisDetails.analysis}\n`;
       contentContext += `\nCRITICAL: Generate film/short film content, NOT music content.\n\n`;
+    } else if (videoType === 'photo-image') {
+      contentContext += `🖼️ IMAGE CONTENT ANALYSIS (PRIMARY SOURCE - FROM THE PHOTO/IMAGE):\n`;
+      contentContext += `Content Type: PHOTO / STANDALONE IMAGE (e.g. Instagram post)\n`;
+      if (details.description) contentContext += `What's Visible: ${details.description}\n`;
+      if (details.textVisible) contentContext += `Text Visible: "${details.textVisible}"\n`;
+      if (details.visualStyle) contentContext += `Visual Style: ${details.visualStyle}\n`;
+      if (details.mood) contentContext += `Mood: ${details.mood}\n`;
+      if (details.setting) contentContext += `Setting: ${details.setting}\n`;
+      if (details.genre) contentContext += `Genre/Style: ${details.genre}\n`;
+      if (details.artist) contentContext += `Artist/Subject: ${details.artist}\n`;
+      if (videoAnalysisDetails.analysis) contentContext += `Analysis: ${videoAnalysisDetails.analysis}\n`;
+      contentContext += `\nCRITICAL: Generate titles, descriptions, and hashtags SPECIFIC to what's ACTUALLY in this image. Match the mood, style, and content.\n\n`;
     } else if (videoAnalysis) {
       contentContext += `VIDEO FRAME ANALYSIS: ${videoAnalysis}\n\n`;
     }
@@ -795,6 +859,14 @@ ${musicDetails.mood ? `- Mood/Energy: ${musicDetails.mood} - Match this exact mo
    - ✅ If song detected: "Hotline Bling Official Video! 🎵 Watch Now! #NewMusic"\n`;
 
   return `You are an expert social media content creator specializing in ${platform} for MUSIC content.
+
+⚠️ RELEVANCE RULE (HIGHEST PRIORITY):
+- Generated content MUST match what is actually in the video. Use the VIDEO CONTENT ANALYSIS and FILENAME ANALYSIS below as the source of truth.
+${filenameUninformative && videoAnalysisDetails ? `- The filename does NOT describe the content (it is a date/timestamp). You MUST base ALL suggestions on the VIDEO FRAME (image) provided—analyze what you see (people, setting, mood, text on screen, genre) and generate titles/descriptions that fit THAT content. Do not make up generic timestamp or "recording" titles.` : ''}
+- If the video is a SONG / MUSIC VIDEO: generate ONLY music-related titles and descriptions (song title, artist, genre, music vibe). NEVER generate unrelated topics (e.g. food, cooking, tech, travel) for a music video.
+- If the video is NON-MUSIC (e.g. coding, vlog): generate content for that topic only. Do not suggest music titles for a coding tutorial.
+- Give the user ideas that fit THIS video and exceed expectations (e.g. for a song video: titles that best suit the song, mood, and genre—not generic or off-topic suggestions).
+- Every suggestion must feel like it was written specifically for THIS video.
 
 ${voiceInstructions}
 

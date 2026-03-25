@@ -1,25 +1,31 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSubscription } from '../../contexts/SubscriptionContext';
 import { Youtube, Instagram, Video, Calendar as CalendarIcon, Send, Save, Upload, X, Image as ImageIcon, Sparkles, Wand2, TrendingUp, Search, Zap, Clock, BarChart3, FileText } from 'lucide-react';
-import { uploadMedia } from '../../services/mediaService';
+import { uploadMedia, getMediaDisplayUrl } from '../../services/mediaService';
 import { generateAIContent } from '../../services/aiService';
 import { getVoiceProfiles, type VoiceProfile } from '../../services/voiceProfileService';
 import { getRecommendedPostingTime } from '../../services/analyticsService';
 import { predictPerformance } from '../../services/predictionService';
 import { PerformancePrediction } from './PerformancePrediction';
+import { UpgradeModal } from '../UpgradeModal';
 
 export function PostComposer() {
   const { user } = useAuth();
+  const { canUseFeature, isAtLimit } = useSubscription();
+  const [showUpgrade, setShowUpgrade] = useState(false);
+  const [upgradeMessage, setUpgradeMessage] = useState<string>('');
+  const [previewImageError, setPreviewImageError] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [tags, setTags] = useState('');
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
   const [scheduledDate, setScheduledDate] = useState('');
   const [scheduledTime, setScheduledTime] = useState('');
-  const [scheduleType, setScheduleType] = useState<'once' | 'recurring'>('once');
+  const [scheduleType] = useState<'once' | 'recurring'>('once');
   const [recurringDays, setRecurringDays] = useState<number[]>([]);
-  const [recurringTime, setRecurringTime] = useState('18:00');
+  const [recurringTime] = useState('18:00');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [selectedMedia, setSelectedMedia] = useState<string[]>([]);
@@ -43,6 +49,8 @@ export function PostComposer() {
   const [showPrediction, setShowPrediction] = useState(false);
   const [predictionThumbnail, setPredictionThumbnail] = useState<string | null>(null);
   const [videoDuration, setVideoDuration] = useState<number | null>(null);
+  const [lastUploadedFileName, setLastUploadedFileName] = useState<string | null>(null);
+  const [selectedMediaPreviewUrl, setSelectedMediaPreviewUrl] = useState<string | null>(null);
   const [captionTemplates, setCaptionTemplates] = useState<{ id: string; name: string; content: string }[]>([]);
   const [templateName, setTemplateName] = useState('');
   const [savingTemplate, setSavingTemplate] = useState(false);
@@ -60,6 +68,29 @@ export function PostComposer() {
       setRecommendedTime(null);
     }
   }, [selectedPlatforms]);
+
+  useEffect(() => {
+    if (selectedMedia.length === 0 || !mediaLibrary.length) {
+      setSelectedMediaPreviewUrl(null);
+      setPreviewImageError(false);
+      return;
+    }
+    const media = mediaLibrary.find(m => m.id === selectedMedia[0]);
+    if (!media) {
+      setSelectedMediaPreviewUrl(null);
+      setPreviewImageError(false);
+      return;
+    }
+    if (media.file_type === 'video') {
+      setSelectedMediaPreviewUrl(predictionThumbnail);
+      setPreviewImageError(false);
+      return;
+    }
+    setPreviewImageError(false);
+    getMediaDisplayUrl(media.file_url).then((url) => {
+      setSelectedMediaPreviewUrl(url || null);
+    }).catch(() => setSelectedMediaPreviewUrl(media.file_url || null));
+  }, [selectedMedia, mediaLibrary, predictionThumbnail]);
 
   const loadRecommendedTime = async (platform: string) => {
     setLoadingRecommendation(true);
@@ -178,11 +209,17 @@ export function PostComposer() {
 
   const handleFileUpload = async (files: FileList | null) => {
     if (!files || !user) return;
+    if (isAtLimit('mediaItems') || isAtLimit('storage')) {
+      setUpgradeMessage('You\'ve reached your media limit. Upgrade to add more.');
+      setShowUpgrade(true);
+      return;
+    }
     setUploading(true);
     try {
       const file = files[0];
       const result = await uploadMedia(file, user.id);
       setSelectedMedia([result.id]);
+      setLastUploadedFileName(file.name);
       await loadMediaLibrary();
       
       if (file.type.startsWith('video/')) {
@@ -192,7 +229,11 @@ export function PostComposer() {
         const videoEl = document.createElement('video');
         videoEl.preload = 'metadata';
         videoEl.onloadedmetadata = () => {
-          setVideoDuration(Math.round(videoEl.duration));
+          const d = Math.round(videoEl.duration);
+          if (Number.isFinite(d) && d > 0) {
+            setVideoDuration(d);
+            supabase.from('media_library').update({ duration: d }).eq('id', result.id).eq('user_id', user.id).then(() => {});
+          }
           URL.revokeObjectURL(videoEl.src);
         };
         videoEl.src = URL.createObjectURL(file);
@@ -322,36 +363,70 @@ export function PostComposer() {
 
       if (selectedMedia.length > 0) {
         const media = mediaLibrary.find(m => m.id === selectedMedia[0]);
-        if (media && media.file_type === 'video') {
+        if (media) {
           mediaId = media.id;
           videoFileName = media.file_name;
-          try {
-            let videoUrl = media.file_url;
-            
-            if (!videoUrl.startsWith('http')) {
-              const urlParts = media.file_url.split('/');
-              const mediaIndex = urlParts.indexOf('media');
-              if (mediaIndex !== -1) {
-                const filePath = urlParts.slice(mediaIndex + 1).join('/');
-                const { data: signedUrl } = await supabase.storage
-                  .from('media')
-                  .createSignedUrl(filePath, 3600);
-                if (signedUrl) {
-                  videoUrl = signedUrl.signedUrl;
+          if (media.file_type === 'video') {
+            try {
+              let videoUrl = media.file_url;
+
+              if (!videoUrl.startsWith('http')) {
+                const urlParts = media.file_url.split('/');
+                const mediaIndex = urlParts.indexOf('media');
+                if (mediaIndex !== -1) {
+                  const filePath = urlParts.slice(mediaIndex + 1).join('/');
+                  const { data: signedUrl } = await supabase.storage
+                    .from('media')
+                    .createSignedUrl(filePath, 3600);
+                  if (signedUrl) {
+                    videoUrl = signedUrl.signedUrl;
+                  }
                 }
               }
+
+              const response = await fetch(videoUrl);
+              if (response.ok) {
+                const blob = await response.blob();
+                const videoFile = new File([blob], media.file_name, { type: blob.type || 'video/mp4' });
+                videoThumbnail = await extractVideoThumbnail(videoFile);
+              }
+            } catch (error) {
+              console.error('Error extracting thumbnail:', error);
             }
-            
-            const response = await fetch(videoUrl);
-            if (response.ok) {
-              const blob = await response.blob();
-              const videoFile = new File([blob], media.file_name, { type: blob.type || 'video/mp4' });
-              videoThumbnail = await extractVideoThumbnail(videoFile);
+          } else if (media.file_type === 'image' && media.file_url) {
+            try {
+              let imageUrl = media.file_url;
+              if (!imageUrl.startsWith('http')) {
+                const urlParts = media.file_url.split('/');
+                const mediaIndex = urlParts.indexOf('media');
+                if (mediaIndex !== -1) {
+                  const filePath = urlParts.slice(mediaIndex + 1).join('/');
+                  const { data: signedUrl } = await supabase.storage
+                    .from('media')
+                    .createSignedUrl(filePath, 3600);
+                  if (signedUrl) imageUrl = signedUrl.signedUrl;
+                }
+              }
+              const response = await fetch(imageUrl);
+              if (response.ok) {
+                const blob = await response.blob();
+                const reader = new FileReader();
+                videoThumbnail = await new Promise<string | null>((resolve) => {
+                  reader.onloadend = () => resolve(reader.result as string || null);
+                  reader.readAsDataURL(blob);
+                });
+              }
+            } catch (error) {
+              console.error('Error loading image for AI:', error);
             }
-          } catch (error) {
-            console.error('Error extracting thumbnail:', error);
           }
         }
+      }
+      if (!videoThumbnail && predictionThumbnail) {
+        videoThumbnail = predictionThumbnail;
+      }
+      if (!videoFileName && lastUploadedFileName) {
+        videoFileName = lastUploadedFileName;
       }
 
       const result = await generateAIContent({
@@ -379,7 +454,12 @@ export function PostComposer() {
         setShowSuggestions('tags');
       }
     } catch (error) {
-      setMessage({ type: 'error', text: error instanceof Error ? error.message : 'Erreur lors de la génération AI' });
+      const errMsg = error instanceof Error ? error.message : 'Erreur lors de la génération AI';
+      setMessage({ type: 'error', text: errMsg });
+      if (errMsg.includes('limit') || errMsg.includes('Upgrade')) {
+        setUpgradeMessage(errMsg);
+        setShowUpgrade(true);
+      }
     } finally {
       setAiGenerating(false);
     }
@@ -401,6 +481,18 @@ export function PostComposer() {
   const handleSave = async (publish: boolean = false) => {
     if (!user || !title || selectedPlatforms.length === 0) {
       setMessage({ type: 'error', text: 'Veuillez remplir tous les champs requis' });
+      return;
+    }
+
+    if (scheduleType === 'recurring' && !canUseFeature('recurringSchedules')) {
+      setUpgradeMessage('Recurring schedules are available on Starter and Pro plans.');
+      setShowUpgrade(true);
+      return;
+    }
+
+    if (publish && isAtLimit('posts')) {
+      setUpgradeMessage('You have reached your monthly post limit. Upgrade to create more posts.');
+      setShowUpgrade(true);
       return;
     }
 
@@ -697,6 +789,12 @@ export function PostComposer() {
 
   return (
     <div className="space-y-6">
+      <UpgradeModal
+        open={showUpgrade}
+        onClose={() => { setShowUpgrade(false); setUpgradeMessage(''); }}
+        title="Upgrade your plan"
+        message={upgradeMessage || undefined}
+      />
       <div>
         <h1 className="text-3xl font-bold text-slate-900">Créer une publication</h1>
         <p className="text-slate-600 mt-2">Partagez votre contenu sur plusieurs plateformes</p>
@@ -718,36 +816,61 @@ export function PostComposer() {
                     onChange={(e) => handleFileUpload(e.target.files)}
                     className="hidden"
                   />
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploading}
-                    className="flex flex-col items-center gap-2 mx-auto"
-                  >
-                    <Upload className="w-8 h-8 text-slate-400" />
-                    <span className="text-sm text-slate-600">
-                      {uploading ? 'Upload en cours...' : 'Cliquez pour uploader'}
-                    </span>
-                  </button>
-                  <button
-                    onClick={() => setShowMediaPicker(true)}
-                    className="mt-4 text-sm text-blue-600 hover:text-blue-700"
-                  >
-                    ou sélectionner depuis la bibliothèque
-                  </button>
+                  {(isAtLimit('mediaItems') || isAtLimit('storage')) ? (
+                    <div className="space-y-3">
+                      <p className="text-slate-600">You&apos;ve reached your media limit.</p>
+                      <button
+                        type="button"
+                        onClick={() => { setUpgradeMessage('Upgrade to add more media and storage.'); setShowUpgrade(true); }}
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 text-white font-medium rounded-lg hover:bg-amber-600"
+                      >
+                        Upgrade plan
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploading}
+                        className="flex flex-col items-center gap-2 mx-auto"
+                      >
+                        <Upload className="w-8 h-8 text-slate-400" />
+                        <span className="text-sm text-slate-600">
+                          {uploading ? 'Upload en cours...' : 'Cliquez pour uploader'}
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => setShowMediaPicker(true)}
+                        disabled={uploading}
+                        className="mt-4 text-sm text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                      >
+                        ou sélectionner depuis la bibliothèque
+                      </button>
+                    </>
+                  )}
                 </div>
               ) : (
                 <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-lg">
                   {mediaLibrary.find(m => m.id === selectedMedia[0]) && (
                     <>
-                      <div className="w-16 h-16 bg-slate-200 rounded flex items-center justify-center">
-                        {mediaLibrary.find(m => m.id === selectedMedia[0])?.file_type === 'video' ? (
-                          <Video className="w-6 h-6 text-slate-400" />
+                      <div className="w-24 h-24 rounded-lg overflow-hidden bg-slate-200 flex-shrink-0 flex items-center justify-center">
+                        {selectedMediaPreviewUrl && !previewImageError ? (
+                          <img
+                            src={selectedMediaPreviewUrl}
+                            alt=""
+                            className="w-full h-full object-cover"
+                            onError={() => setPreviewImageError(true)}
+                          />
                         ) : (
-                          <ImageIcon className="w-6 h-6 text-slate-400" />
+                          mediaLibrary.find(m => m.id === selectedMedia[0])?.file_type === 'video' ? (
+                            <Video className="w-8 h-8 text-slate-400" />
+                          ) : (
+                            <ImageIcon className="w-8 h-8 text-slate-400" />
+                          )
                         )}
                       </div>
-                      <div className="flex-1">
-                        <p className="font-medium text-slate-900">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-slate-900 truncate">
                           {mediaLibrary.find(m => m.id === selectedMedia[0])?.file_name}
                         </p>
                         <p className="text-sm text-slate-500">
@@ -1099,7 +1222,7 @@ export function PostComposer() {
                 scheduledDay={scheduledDate ? new Date(scheduledDate).getDay() : undefined}
                 scheduledHour={scheduledTime ? parseInt(scheduledTime.split(':')[0]) : undefined}
                 thumbnailBase64={predictionThumbnail || undefined}
-                videoDuration={videoDuration || undefined}
+                videoDuration={(videoDuration && videoDuration > 0 && Number.isFinite(videoDuration)) ? videoDuration : undefined}
                 onClose={() => setShowPrediction(false)}
               />
             )}
@@ -1356,8 +1479,8 @@ export function PostComposer() {
                             videoEl.crossOrigin = 'anonymous';
                             
                             videoEl.onloadedmetadata = () => {
-                              setVideoDuration(Math.round(videoEl.duration));
-                              
+                              const d = Math.round(videoEl.duration);
+                              if (Number.isFinite(d) && d > 0) setVideoDuration(d);
                               videoEl.currentTime = Math.min(2, videoEl.duration / 4);
                             };
                             
@@ -1387,9 +1510,11 @@ export function PostComposer() {
                         : 'border-slate-200 hover:border-slate-300'
                     }`}
                   >
-                    <div className="w-full aspect-video bg-slate-100 rounded flex items-center justify-center mb-2">
+                    <div className="w-full aspect-video bg-slate-100 rounded flex items-center justify-center mb-2 overflow-hidden">
                       {media.file_type === 'video' ? (
                         <Video className="w-8 h-8 text-slate-400" />
+                      ) : media.file_url ? (
+                        <img src={media.file_url} alt="" className="w-full h-full object-cover" />
                       ) : (
                         <ImageIcon className="w-8 h-8 text-slate-400" />
                       )}

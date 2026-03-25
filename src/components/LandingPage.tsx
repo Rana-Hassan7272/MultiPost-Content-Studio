@@ -1,15 +1,13 @@
-import { useState } from 'react';
 import { Calendar, Image, BarChart, Zap, Shield, Users } from 'lucide-react';
 import { Pricing } from './Pricing';
 import { supabase } from '../lib/supabase';
+import { createCheckoutSession } from '../services/subscriptionService';
 
 interface LandingPageProps {
   onGetStarted: () => void;
 }
 
 export function LandingPage({ onGetStarted }: LandingPageProps) {
-  const [email, setEmail] = useState('');
-
   const handleSelectPlan = async (planType: string) => {
     if (planType === 'free') {
       onGetStarted();
@@ -23,23 +21,17 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
     }
 
     try {
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-checkout`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ planType }),
-        }
-      );
-
-      const { url } = await response.json();
-      if (url) window.location.href = url;
+      const result = await createCheckoutSession(planType as 'starter' | 'pro');
+      if (result.error) {
+        alert(result.error);
+        return;
+      }
+      if (result.url) {
+        window.location.href = result.url;
+      }
     } catch (error) {
-      console.error('Error creating checkout session:', error);
-      alert('Erreur lors de la création de la session de paiement');
+      console.error('Checkout error:', error);
+      alert('Something went wrong. Please try again.');
     }
   };
 

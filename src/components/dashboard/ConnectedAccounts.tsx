@@ -4,6 +4,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { Youtube, Instagram, Video, Plus, Trash2, CheckCircle, XCircle } from 'lucide-react';
 import { getYouTubeAuthUrl } from '../../services/youtubeService';
 import { getInstagramAuthUrl, isInstagramConfigured } from '../../services/instagramService';
+import { useSubscription } from '../../contexts/SubscriptionContext';
+import { UpgradeModal } from '../UpgradeModal';
 
 interface ConnectedAccount {
   id: string;
@@ -16,9 +18,11 @@ interface ConnectedAccount {
 
 export function ConnectedAccounts() {
   const { user } = useAuth();
+  const { isAtLimit, limits, loading: subscriptionLoading } = useSubscription();
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showUpgrade, setShowUpgrade] = useState(false);
 
   useEffect(() => {
     loadAccounts();
@@ -27,38 +31,64 @@ export function ConnectedAccounts() {
 
   const checkStoredOAuth = async () => {
     if (!user) return;
-    
-    const storedCode = localStorage.getItem('youtube_oauth_code');
-    const storedState = localStorage.getItem('youtube_oauth_state');
-    
-    if (!storedCode || !storedState) return;
-    
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    try {
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/youtube-oauth?action=callback&code=${encodeURIComponent(storedCode)}&state=${encodeURIComponent(storedState)}`,
-        {
-          method: 'GET',
-          headers: {
-            'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
 
-      const data = await response.json();
-      
-      if (response.ok && data.success) {
-        localStorage.removeItem('youtube_oauth_code');
-        localStorage.removeItem('youtube_oauth_state');
-        await loadAccounts();
-        alert('YouTube account connected successfully!');
-      } else {
-        console.error('Failed to process stored OAuth:', data);
+    const storedYtCode = localStorage.getItem('youtube_oauth_code');
+    const storedYtState = localStorage.getItem('youtube_oauth_state');
+    const storedIgCode = localStorage.getItem('instagram_oauth_code');
+    const storedIgState = localStorage.getItem('instagram_oauth_state');
+
+    if (storedYtCode && storedYtState) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      try {
+        const response = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/youtube-oauth?action=callback&code=${encodeURIComponent(storedYtCode)}&state=${encodeURIComponent(storedYtState)}`,
+          {
+            method: 'GET',
+            headers: {
+              'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        const data = await response.json();
+        if (response.ok && data.success) {
+          localStorage.removeItem('youtube_oauth_code');
+          localStorage.removeItem('youtube_oauth_state');
+          await loadAccounts();
+          alert('YouTube account connected successfully!');
+        } else {
+          console.error('Failed to process stored OAuth:', data);
+        }
+      } catch (error) {
+        console.error('Error processing stored YouTube OAuth:', error);
       }
-    } catch (error) {
-      console.error('Error processing stored OAuth:', error);
+    }
+
+    if (storedIgCode && storedIgState) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      try {
+        const response = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/instagram-oauth?action=callback&code=${encodeURIComponent(storedIgCode)}&state=${encodeURIComponent(storedIgState)}`,
+          {
+            method: 'GET',
+            headers: {
+              'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && data.success) {
+          localStorage.removeItem('instagram_oauth_code');
+          localStorage.removeItem('instagram_oauth_state');
+          await loadAccounts();
+          alert('Instagram account connected successfully!');
+        } else {
+          console.error('Failed to process stored Instagram OAuth:', data);
+        }
+      } catch (error) {
+        console.error('Error processing stored Instagram OAuth:', error);
+      }
     }
   };
 
@@ -82,6 +112,12 @@ export function ConnectedAccounts() {
   };
 
   const handleConnect = async (platform: string) => {
+    const activeCount = accounts.filter(a => a.is_active).length;
+    const atAccountLimit = !subscriptionLoading && (isAtLimit('accounts') || activeCount >= limits.connectedAccounts);
+    if (atAccountLimit) {
+      setShowUpgrade(true);
+      return;
+    }
     if (platform === 'youtube') {
       try {
         const authUrl = await getYouTubeAuthUrl();
@@ -112,7 +148,7 @@ export function ConnectedAccounts() {
   };
 
   const handleDisconnect = async (id: string) => {
-    if (!confirm('Êtes-vous sûr de vouloir déconnecter ce compte ?')) return;
+    if (!confirm('Are you sure you want to disconnect this account?')) return;
 
     try {
       const { error } = await supabase
@@ -164,10 +200,16 @@ export function ConnectedAccounts() {
 
   return (
     <div className="space-y-6">
+      <UpgradeModal
+        open={showUpgrade}
+        onClose={() => setShowUpgrade(false)}
+        title="Connect more accounts"
+        message="Your plan limits the number of connected accounts. Upgrade to connect more."
+      />
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-slate-900">Comptes connectés</h1>
-          <p className="text-slate-600 mt-2">Gérez vos connexions aux plateformes sociales</p>
+          <h1 className="text-3xl font-bold text-slate-900">Linked accounts</h1>
+          <p className="text-slate-600 mt-2">Manage your social platform connections</p>
         </div>
       </div>
 
@@ -177,11 +219,11 @@ export function ConnectedAccounts() {
             <Plus className="w-6 h-6 text-white" />
           </div>
           <div className="flex-1">
-            <h3 className="font-semibold text-slate-900">Connexion aux réseaux sociaux</h3>
+            <h3 className="font-semibold text-slate-900">Connect social networks</h3>
             <p className="text-sm text-slate-600 mt-1">
               {accounts.length === 0
-                ? "Connectez au moins un compte (YouTube ou Instagram) pour publier et suivre vos statistiques."
-                : "L'intégration OAuth avec les plateformes nécessite une configuration API. Utilisez les boutons ci-dessous pour simuler des connexions."}
+                ? "Connect at least one account (YouTube or Instagram) to publish and track your stats."
+                : "Use the buttons below to connect or disconnect accounts."}
             </p>
           </div>
         </div>
@@ -231,39 +273,52 @@ export function ConnectedAccounts() {
                         {connectedAccount.is_active ? (
                           <>
                             <CheckCircle className="w-3 h-3" />
-                            Actif
+                            Active
                           </>
                         ) : (
                           <>
                             <XCircle className="w-3 h-3" />
-                            Inactif
+                            Inactive
                           </>
                         )}
                       </span>
                     </div>
                     <div className="text-sm text-slate-600">
-                      Connecté le {new Date(connectedAccount.created_at).toLocaleDateString('fr-FR')}
+                      Connected on {new Date(connectedAccount.created_at).toLocaleDateString()}
                     </div>
                     <button
                       onClick={() => handleDisconnect(connectedAccount.id)}
                       className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 rounded-lg font-medium hover:bg-red-100 transition"
                     >
                       <Trash2 className="w-4 h-4" />
-                      Déconnecter
+                      Disconnect
                     </button>
                   </>
                 ) : (
                   <>
-                    <p className="text-sm text-slate-600">
-                      Connectez votre compte {platform.name} pour publier du contenu automatiquement.
-                    </p>
-                    <button
-                      onClick={() => handleConnect(platform.id)}
-                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-lg font-medium hover:from-blue-600 hover:to-cyan-600 transition"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Connecter
-                    </button>
+                    {platform.id === 'tiktok' ? (
+                      <>
+                        <p className="text-sm text-slate-600">
+                          This feature is coming soon.
+                        </p>
+                        <div className="py-2 px-3 rounded-lg bg-slate-100 text-slate-500 text-sm font-medium">
+                          Coming soon
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm text-slate-600">
+                          Connect your {platform.name} account to automatically post content.
+                        </p>
+                        <button
+                          onClick={() => handleConnect(platform.id)}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-lg font-medium hover:from-blue-600 hover:to-cyan-600 transition"
+                        >
+                          <Plus className="w-4 h-4" />
+                          Connect
+                        </button>
+                      </>
+                    )}
                   </>
                 )}
               </div>
@@ -275,7 +330,7 @@ export function ConnectedAccounts() {
       {accounts.length > 0 && (
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           <div className="p-6 border-b border-slate-200">
-            <h2 className="text-xl font-bold text-slate-900">Tous les comptes</h2>
+            <h2 className="text-xl font-bold text-slate-900">All accounts</h2>
           </div>
           <div className="divide-y divide-slate-200">
             {accounts.map((account) => {
@@ -304,12 +359,12 @@ export function ConnectedAccounts() {
                         {account.is_active ? (
                           <>
                             <CheckCircle className="w-3 h-3" />
-                            Actif
+                            Active
                           </>
                         ) : (
                           <>
                             <XCircle className="w-3 h-3" />
-                            Inactif
+                            Inactive
                           </>
                         )}
                       </span>
@@ -333,16 +388,16 @@ export function ConnectedAccounts() {
           <div className="bg-white rounded-xl max-w-md w-full p-6 space-y-4">
             <h3 className="text-xl font-bold text-slate-900">Information</h3>
             <p className="text-slate-600">
-              La connexion OAuth complète nécessite la configuration des APIs des plateformes sociales (YouTube Data API, Instagram Graph API, TikTok API).
+              Full OAuth integration requires API configuration for each platform (YouTube Data API, Instagram Graph API, TikTok API).
             </p>
             <p className="text-sm text-slate-500">
-              Cette fonctionnalité est prête à être intégrée une fois que vous aurez configuré vos clés API.
+              This feature is ready to integrate once your API keys are configured.
             </p>
             <button
               onClick={() => setShowAddModal(false)}
               className="w-full px-4 py-3 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 transition"
             >
-              Compris
+              Got it
             </button>
           </div>
         </div>

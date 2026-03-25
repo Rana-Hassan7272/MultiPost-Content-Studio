@@ -9,11 +9,9 @@ import {
   Target,
   BarChart3,
   CheckCircle,
-  XCircle,
   Youtube,
   Instagram,
   Video,
-  ArrowRight,
   Zap
 } from 'lucide-react';
 
