@@ -46,12 +46,17 @@ jobs:
           # If SUPABASE_URL was accidentally saved with a /rest/v1 suffix, edge-functions will 404.
           SUPABASE_URL_TRIM=${SUPABASE_URL_TRIM%/rest/v1}
           SUPABASE_URL_TRIM=${SUPABASE_URL_TRIM%/rest/v1/}
+          SUPABASE_URL_TRIM=${SUPABASE_URL_TRIM%/functions/v1}
+          SUPABASE_URL_TRIM=${SUPABASE_URL_TRIM%/functions/v1/}
           SUPABASE_URL_TRIM=${SUPABASE_URL_TRIM%/}
           SERVICE_KEY=$(echo -n "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
           ANON_KEY=$(echo -n "$SUPABASE_ANON_KEY" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
           
+          TARGET_URL="${SUPABASE_URL_TRIM}/functions/v1/post-queue-processor"
+          echo "Calling edge function URL: ${TARGET_URL}"
+
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            "${SUPABASE_URL_TRIM}/functions/v1/post-queue-processor" \
+            "${TARGET_URL}" \
             -H "Authorization: Bearer ${SERVICE_KEY}" \
             -H "apikey: ${ANON_KEY}" \
             -H "Content-Type: application/json")
