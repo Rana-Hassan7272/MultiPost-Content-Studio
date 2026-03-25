@@ -293,3 +293,75 @@ Start with MVP (Phases 1-5) → Launch → Get feedback → Add Instagram/TikTok
 This gives you a working, differentiated product in 5 weeks, then iterate based on user feedback.
 
 Want me to start with Phase 1 (database setup and YouTube OAuth)?
+
+
+
+
+
+
+
+Going to quickly re-scan the main app architecture (routing, providers, dashboard nav, subscription gating, and the new email marketing module) so I can tell you exactly what’s still missing before you deploy.
+
+[5 tools called]
+
+Reviewing the core flow now (providers, dashboard routing, subscription gating, and email module wiring) to identify what’s already working vs what still needs hardening before going live.
+
+[13 tools called]
+
+Next I’ll check the backend “scheduler” parts (GitHub Actions workflow for scheduled posts, subscription activation edge function) and the email event/tracking gaps, so I can recommend a production-ready checklist.
+
+[10 tools called]
+
+Now I’ll inspect the subscription-limit enforcement points (MediaLibrary, PostComposer, VoiceProfileSettings, and the SQL enforcement migration) to see what’s UI-only vs what’s guaranteed on the backend—then I’ll list the final “go-live” gaps.
+
+[6 tools called]
+
+## Main architecture (how the app works)
+- `src/App.tsx`
+  - Handles OAuth return first via `OAuthCallbackScreen` (so the normal app tree/providers don’t interfere).
+  - Otherwise wraps the app in `SubscriptionProvider`.
+- `src/contexts/AuthContext.tsx`
+  - Owns Supabase auth state (`user`, `session`).
+- `src/contexts/SubscriptionContext.tsx`
+  - Loads the user’s `plan` + `usage` from `subscriptionService.ts` and computes `limits` for UI gating.
+- `src/components/Dashboard.tsx`
+  - Dashboard “router” by `currentView` (overview/calendar/media/compose/email/etc).
+  - Adds an in-app “Upgrade plan” flow (fake checkout when `VITE_PAYMENT_MODE=fake`).
+- Services / Edge functions
+  - Frontend services call Supabase tables and invoke edge functions (ex: `email-campaign-dispatch`).
+
+## What’s left / best to add before going live
+1. **Server-side scheduling for email due campaigns**
+   - Right now `EmailMarketing.tsx` auto-processes due campaigns with a client `setInterval`.
+   - In production, users may close the tab, so scheduled sends may never run.
+   - Best: add a cron workflow (like your existing `.github/workflows/process-scheduled-posts.yml`) that calls `email-campaign-dispatch` with `mode: "due"`.
+
+2. **Resend tracking (opens/clicks/replies) is not implemented yet**
+   - Your email UI/analytics reads `opens_count/clicks_count/replies_count` from `email_campaigns`, and `email_events` exists in the DB.
+   - But the current `email-campaign-dispatch` only records `sent` and `failed` events (no webhooks → no open/click/reply updates).
+   - Best: implement Resend webhook handling + update:
+     - `email_events` (delivered/opened/clicked/replied/bounced/etc)
+     - rollups in `email_campaigns` counts
+
+3. **Idempotency / “don’t reset history on re-send”**
+   - `email-campaign-dispatch` uses `upsert(... status: "pending")` for each recipient conflict.
+   - If someone triggers “Send Now” again on the same campaign (or concurrent runs happen), it can overwrite previous recipient statuses.
+   - Best: make recipient upsert conditional (only set to `pending` when the recipient is not already `sent`, or when campaign status transition is valid).
+
+4. **Backend plan-limit enforcement is incomplete**
+   - Your SQL trigger enforcement migration covers only:
+     - `posts` (posts per month)
+     - `connected_accounts` (active connected accounts)
+     - `media_library` (count + storage)
+   - But UI gating also covers things like **voice profiles** and **AI generations**.
+   - Best: extend triggers (or enforce in edge functions) so users can’t bypass limits via direct DB calls / API paths.
+
+5. **“Mock mode” behavior should be safer in production**
+   - The email function falls back to `sent` in mock mode when Resend config is missing.
+   - For a live system, it’s better to **fail loudly** (mark campaign `failed` with a clear error) if `RESEND_API_KEY` / `EMAIL_FROM` aren’t correctly configured, instead of pretending emails were snt.
+
+6. **Tracking + UX clarity**
+   - When tracking isn’t available yet, either hide those analytics cards or show “tracking not enabled” instead of always displaying zeros.
+   - (You already improved UI for due vs send-now vs sent; this is the next UX polish area.)
+
+If you approve, the highest-impact next step before production is: **(1) add a cron/scheduled job for due email campaigns** and **(2) implement Resend webhooks to populate opens/clicks/replies**.
